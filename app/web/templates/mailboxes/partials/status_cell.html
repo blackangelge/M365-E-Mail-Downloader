@@ -1,0 +1,20 @@
+<td id="sync-status-{{ mailbox_id }}"
+    {% if state and state.status.value == "running" %}
+    hx-get="/mailboxes/{{ mailbox_id }}/status" hx-trigger="every 3s" hx-swap="outerHTML"
+    {% endif %}>
+  {% if not state %}
+    <span class="badge idle">noch nie synchronisiert</span>
+  {% elif state.status.value == "error" %}
+    <span class="badge err" title="{{ state.last_error }}">Fehler</span>
+    <div class="hint">{{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} · {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</div>
+  {% elif state.status.value == "running" %}
+    <span class="badge warn">läuft &middot; {{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} &middot; {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</span>
+  {% else %}
+    <span class="badge ok" title="Wird auch durch manuelles 'Jetzt ausführen' aktualisiert, nicht nur durch den Zeitplan.">idle &middot; letzter Sync {{ state.last_delta_run_at | datetime_de }}</span>
+    <div class="hint">{{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} · {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</div>
+  {% endif %}
+  <div class="hint" title="Regulärer Zeitplan des Jobs - unabhängig von manuellen Läufen.">
+    {% if next_sync_at %}Nächster geplanter Job-Lauf: {{ next_sync_at | datetime_de }}
+    {% else %}kein aktiver Job für dieses Postfach{% endif %}
+  </div>
+</td>

@@ -1,0 +1,10 @@
+{% if mailboxes %}
+  {% for mb in mailboxes %}
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);margin:6px 0;">
+    <input type="checkbox" name="mailbox_ids" value="{{ mb.id }}" style="width:auto;" {{ 'checked' if mb.id in selected_ids else '' }}>
+    {{ mb.email_address }}
+  </label>
+  {% endfor %}
+{% else %}
+  <p class="muted">Dieser Tenant hat noch keine Postfächer. <a href="/mailboxes">Postfach anlegen</a></p>
+{% endif %}

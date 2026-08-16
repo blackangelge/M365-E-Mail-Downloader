@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Postfächer - PDF Download M365{% endblock %}
+{% block content %}
+<h1>Postfächer</h1>
+
+<div class="card">
+  <h2 style="margin-top:0">Neues Postfach</h2>
+  {% if tenants %}
+  <form method="post" action="/mailboxes">
+    <label for="tenant_id">Tenant</label>
+    <select id="tenant_id" name="tenant_id" required>
+      {% for t in tenants %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+    </select>
+    <label for="email_address">E-Mail-Adresse des Postfachs</label>
+    <input type="email" id="email_address" name="email_address" required placeholder="rechnungen@firma.de">
+    <label for="display_name">Anzeigename (optional)</label>
+    <input type="text" id="display_name" name="display_name">
+    <div style="margin-top:16px;"><button class="btn" type="submit">Hinzufügen</button></div>
+  </form>
+  {% else %}
+  <p class="muted">Bitte zuerst einen <a href="/tenants/new">Tenant anlegen</a>.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% if mailboxes %}
+  <table>
+    <thead><tr><th>E-Mail</th><th>Tenant</th><th>Sync-Status</th><th></th></tr></thead>
+    <tbody>
+      {% for row in mailboxes %}
+      {% set state = sync_by_mailbox.get(row.mailbox.id) %}
+      {% set mailbox_id = row.mailbox.id %}
+      {% set synced_count = synced_counts.get(row.mailbox.id, 0) %}
+      {% set downloaded_count = downloaded_counts.get(row.mailbox.id, 0) %}
+      {% set next_sync_at = next_sync_ats.get(row.mailbox.id) %}
+      <tr>
+        <td>{{ row.mailbox.email_address }}</td>
+        <td>{{ row.tenant.name }}</td>
+        {% include "mailboxes/partials/status_cell.html" with context %}
+        <td>
+          <form class="inline" method="post" action="/mailboxes/{{ row.mailbox.id }}/test">
+            <button class="btn small secondary" type="submit">Verbindung testen</button>
+          </form>
+          <form class="inline" method="post" action="/mailboxes/{{ row.mailbox.id }}/delete" onsubmit="return confirm('Postfach wirklich entfernen?');">
+            <button class="btn small danger" type="submit">Entfernen</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Noch keine Postfächer konfiguriert.</p>
+  {% endif %}
+</div>
+{% endblock %}

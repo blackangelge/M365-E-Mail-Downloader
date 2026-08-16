@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Job - PDF Download M365{% endblock %}
+{% block content %}
+<h1>{{ "Job bearbeiten" if detail else "Neuer Job" }}</h1>
+
+<form class="card" method="post" action="{{ '/jobs/' ~ detail.job.id if detail else '/jobs' }}">
+  <label for="name">Job-Name</label>
+  <input type="text" id="name" name="name" required value="{{ detail.job.name if detail else '' }}">
+
+  {% if not detail %}
+  <label for="tenant_id">Tenant</label>
+  <select id="tenant_id" name="tenant_id" required
+          onchange="htmx.ajax('GET', '/jobs/mailboxes-for-tenant/' + this.value, {target:'#mailbox-list', swap:'innerHTML'})">
+    <option value="" disabled selected>Bitte wählen</option>
+    {% for t in tenants %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+  </select>
+  {% else %}
+  <p class="hint">Tenant: <strong>{{ detail.job.tenant_id }}</strong> (nach dem Anlegen nicht mehr änderbar)</p>
+  {% endif %}
+
+  <label>Postfächer</label>
+  <div id="mailbox-list" class="card" style="background:var(--panel-2);">
+    {% if detail %}
+      {% set selected_ids = detail.mailboxes | map(attribute='id') | list %}
+      {% include "jobs/partials/mailbox_checkboxes.html" with context %}
+    {% else %}
+      <p class="muted">Bitte zuerst einen Tenant auswählen.</p>
+    {% endif %}
+  </div>
+
+  <fieldset>
+    <legend>Filter</legend>
+    <label for="filter_set_id">Zu verwendender Filter</label>
+    <select id="filter_set_id" name="filter_set_id" required>
+      <option value="" disabled {{ '' if detail else 'selected' }}>Bitte wählen</option>
+      {% for fs in filter_sets %}
+      <option value="{{ fs.id }}" {{ 'selected' if detail and detail.filter_set.id == fs.id else '' }}>{{ fs.name }}</option>
+      {% endfor %}
+    </select>
+    {% if filter_sets %}
+    <p class="hint"><a href="/filters">Filter verwalten</a> (Datum, Endungen, Ausschluss-Keywords werden dort zentral gepflegt).</p>
+    {% else %}
+    <p class="hint">Noch kein Filter angelegt. <a href="/filters/new">Zuerst einen Filter anlegen</a>.</p>
+    {% endif %}
+  </fieldset>
+
+  <fieldset>
+    <legend>Ablage &amp; Zeitplan</legend>
+    <label for="target_subfolder">Zielordner (unter Download/)</label>
+    <input type="text" id="target_subfolder" name="target_subfolder" required
+           value="{{ detail.job.target_subfolder if detail else '' }}" placeholder="firma-a-rechnungen">
+    <p class="hint">Nur ein einzelner Ordnername, kein Pfad. Schrägstriche und Sonderzeichen werden automatisch durch "_" ersetzt.</p>
+    <label for="poll_interval_minutes">Prüfintervall (Minuten)</label>
+    <input type="number" id="poll_interval_minutes" name="poll_interval_minutes" min="1" required
+           value="{{ detail.job.poll_interval_minutes if detail else 15 }}">
+  </fieldset>
+
+  {% if detail %}
+  <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if detail.job.enabled else '' }} style="width:auto;display:inline-block;"> Aktiv</label>
+  {% endif %}
+
+  <div style="margin-top:20px;">
+    <button class="btn" type="submit">Speichern</button>
+    <a class="btn secondary" href="/jobs">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}

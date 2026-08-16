@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - PDF Download M365{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="stat-grid">
+  <div class="stat-tile"><div class="value">{{ totals.today }}</div><div class="label">Heute</div></div>
+  <div class="stat-tile"><div class="value">{{ totals.yesterday }}</div><div class="label">Gestern</div></div>
+  <div class="stat-tile"><div class="value">{{ totals.this_week }}</div><div class="label">Diese Woche</div></div>
+  <div class="stat-tile"><div class="value">{{ totals.last_week }}</div><div class="label">Letzte Woche</div></div>
+  <div class="stat-tile"><div class="value">{{ totals.all_time }}</div><div class="label">Gesamt</div></div>
+</div>
+
+<h2>Downloads pro Postfach</h2>
+<div class="card">
+  {% if per_mailbox %}
+  <table>
+    <thead><tr><th>Postfach</th><th>Tenant</th><th>Heute</th><th>Diese Woche</th><th>Gesamt</th></tr></thead>
+    <tbody>
+      {% for row in per_mailbox %}
+      <tr>
+        <td>{{ row.email }}</td>
+        <td>{{ row.tenant }}</td>
+        <td>{{ row.today }}</td>
+        <td>{{ row.this_week }}</td>
+        <td>{{ row.all_time }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Noch keine Downloads vorhanden.</p>
+  {% endif %}
+</div>
+
+<h2>Letzte Downloads</h2>
+<div class="card">
+  {% if recent %}
+  <table>
+    <thead><tr><th>Zeitpunkt</th><th>Betreff</th><th>Dateiname</th><th>Pfad</th></tr></thead>
+    <tbody>
+      {% for r in recent %}
+      <tr>
+        <td>{{ r.sighting.seen_at | datetime_de }}</td>
+        <td>{{ r.email.subject or "-" }}</td>
+        <td>{{ r.file.original_filename }}</td>
+        <td class="muted">{{ r.file.stored_path }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Noch keine Downloads vorhanden.</p>
+  {% endif %}
+</div>
+{% endblock %}

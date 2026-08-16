@@ -1,0 +1,24 @@
+<h3 style="margin-top:0;">{{ day | date_de }}</h3>
+<p class="hint" style="margin-top:-8px;">E-Mail-Empfangsdatum dieses Tages · sortiert nach Empfangszeit</p>
+{% if entries %}
+<table>
+  <thead><tr><th>Empfangen</th><th>Status</th><th>Heruntergeladen</th><th>Postfach</th><th>Betreff</th><th>Dateiname</th></tr></thead>
+  <tbody>
+    {% for e in entries %}
+    <tr>
+      <td>{{ e.email.received_at | datetime_de("%H:%M") }}</td>
+      <td>
+        {% if e.sighting.is_new_download %}<span class="badge ok">heruntergeladen</span>
+        {% else %}<span class="badge idle">Duplikat (bereits vorhanden)</span>{% endif %}
+      </td>
+      <td class="muted">{{ e.sighting.seen_at | datetime_de }}</td>
+      <td>{{ e.mailbox.email_address }}</td>
+      <td>{{ e.email.subject or "-" }}</td>
+      <td>{{ e.file.original_filename }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Keine Anhänge an diesem Tag empfangen.</p>
+{% endif %}

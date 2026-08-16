@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Logs - PDF Download M365{% endblock %}
+{% block content %}
+<h1>Verlaufslog</h1>
+
+<form class="card" method="get" action="/logs">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+    <div>
+      <label for="job_id">Job</label>
+      <select id="job_id" name="job_id"><option value="">Alle</option>
+        {% for j in jobs %}<option value="{{ j.id }}" {{ 'selected' if filters.job_id == j.id else '' }}>{{ j.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="mailbox_id">Postfach</label>
+      <select id="mailbox_id" name="mailbox_id"><option value="">Alle</option>
+        {% for m in mailboxes %}<option value="{{ m.id }}" {{ 'selected' if filters.mailbox_id == m.id else '' }}>{{ m.email_address }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label for="date_from">Von (TT.MM.JJJJ)</label><input type="text" class="date-de" id="date_from" name="date_from" inputmode="numeric" maxlength="10" placeholder="TT.MM.JJJJ" pattern="\d{2}\.\d{2}\.\d{4}" title="Format: TT.MM.JJJJ" value="{{ filters.date_from | date_de if filters.date_from else '' }}"></div>
+    <div><label for="date_to">Bis (TT.MM.JJJJ)</label><input type="text" class="date-de" id="date_to" name="date_to" inputmode="numeric" maxlength="10" placeholder="TT.MM.JJJJ" pattern="\d{2}\.\d{2}\.\d{4}" title="Format: TT.MM.JJJJ" value="{{ filters.date_to | date_de if filters.date_to else '' }}"></div>
+    <div><label for="q">Suche (Betreff/Dateiname)</label><input type="text" id="q" name="q" value="{{ filters.q }}"></div>
+  </div>
+  <div style="margin-top:16px;"><button class="btn" type="submit">Filtern</button></div>
+</form>
+
+<div class="card">
+  {% if entries %}
+  <table>
+    <thead><tr><th>Zeitpunkt</th><th>Job</th><th>Postfach</th><th>Betreff</th><th>Dateiname</th><th>Status</th></tr></thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>{{ e.sighting.seen_at | datetime_de }}</td>
+        <td>{{ e.job.name }}</td>
+        <td>{{ e.mailbox.email_address }}</td>
+        <td>{{ e.email.subject or "-" }}</td>
+        <td>{{ e.file.original_filename }}</td>
+        <td>
+          {% if e.sighting.is_new_download %}<span class="badge ok">heruntergeladen</span>
+          {% else %}<span class="badge idle">bereits vorhanden (Duplikat)</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="pagination">
+    {% if page > 1 %}<a class="btn secondary" href="?page={{ page - 1 }}">&larr; Zurück</a>{% endif %}
+    <span class="muted" style="align-self:center;">Seite {{ page }}</span>
+    {% if has_next %}<a class="btn secondary" href="?page={{ page + 1 }}">Weiter &rarr;</a>{% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Keine Einträge gefunden.</p>
+  {% endif %}
+</div>
+{% endblock %}

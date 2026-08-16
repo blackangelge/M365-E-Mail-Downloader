@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Tenant - PDF Download M365{% endblock %}
+{% block content %}
+<h1>{{ "Tenant bearbeiten" if tenant else "Neuer Tenant" }}</h1>
+
+<form class="card" method="post" enctype="multipart/form-data" action="{{ '/tenants/' ~ tenant.id if tenant else '/tenants' }}">
+  <label for="name">Anzeigename</label>
+  <input type="text" id="name" name="name" required value="{{ tenant.name if tenant else '' }}">
+
+  <label for="azure_tenant_id">Azure Tenant ID</label>
+  <input type="text" id="azure_tenant_id" name="azure_tenant_id" required value="{{ tenant.azure_tenant_id if tenant else '' }}">
+
+  <label for="azure_client_id">Azure Client ID (App-Registrierung)</label>
+  <input type="text" id="azure_client_id" name="azure_client_id" required value="{{ tenant.azure_client_id if tenant else '' }}">
+
+  <fieldset>
+    <legend>Authentifizierung</legend>
+    <label><input type="radio" name="auth_type" value="client_secret" onchange="toggleAuth()" id="auth_secret"
+      {{ 'checked' if not tenant or tenant.auth_type.value == 'client_secret' else '' }}> Client-Secret</label>
+    <label><input type="radio" name="auth_type" value="certificate" onchange="toggleAuth()" id="auth_cert"
+      {{ 'checked' if tenant and tenant.auth_type.value == 'certificate' else '' }}> Zertifikat</label>
+
+    <div id="secret_fields">
+      <label for="client_secret">Client-Secret {% if tenant %}(leer lassen, um bestehendes beizubehalten){% endif %}</label>
+      <input type="password" id="client_secret" name="client_secret" placeholder="{{ '••••••••' if tenant and tenant.client_secret_encrypted else '' }}">
+    </div>
+
+    <div id="cert_fields">
+      <label for="certificate_file">Zertifikat (PEM, Private Key + Cert) {% if tenant %}(leer lassen, um bestehendes beizubehalten){% endif %}</label>
+      <input type="file" id="certificate_file" name="certificate_file" accept=".pem,.crt,.cer">
+      <label for="certificate_password">Zertifikat-Passwort (falls vorhanden)</label>
+      <input type="password" id="certificate_password" name="certificate_password">
+    </div>
+  </fieldset>
+
+  {% if tenant %}
+  <label><input type="checkbox" name="is_active" value="1" {{ 'checked' if tenant.is_active else '' }} style="width:auto;display:inline-block;"> Aktiv</label>
+  {% endif %}
+
+  <p class="hint">
+    Einmaliger manueller Azure-Schritt: App-Registrierung in Entra ID anlegen, Application-Permission
+    <code>Mail.Read</code> vergeben, Admin-Consent erteilen. Empfohlen: zusätzlich eine Exchange-Online
+    Application-Access-Policy einrichten, damit die App nur auf die hier konfigurierten Postfächer zugreifen kann.
+  </p>
+
+  <div style="margin-top:20px;">
+    <button class="btn" type="submit">Speichern</button>
+    <a class="btn secondary" href="/tenants">Abbrechen</a>
+  </div>
+</form>
+
+<script>
+  function toggleAuth() {
+    const isCert = document.getElementById('auth_cert').checked;
+    document.getElementById('secret_fields').style.display = isCert ? 'none' : 'block';
+    document.getElementById('cert_fields').style.display = isCert ? 'block' : 'none';
+  }
+  toggleAuth();
+</script>
+{% endblock %}

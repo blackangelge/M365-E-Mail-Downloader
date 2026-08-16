@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdfdl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-pdfdl}
+      # Unterverzeichnis statt direkt des Mount-Points als PGDATA: verhindert, dass initdb bei
+      # eingehängten Host-Verzeichnissen (Docker-Desktop-Mount-Metadaten, verstecktes lost+found o.Ä.)
+      # fälschlich "Verzeichnis nicht leer" meldet - von Postgres selbst so empfohlen.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      # Bind-Mount in einen Projektordner statt eines benannten Docker-Volumes,
+      # damit die Postgres-Daten direkt im Projektverzeichnis liegen.
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pdfdl} -d ${POSTGRES_DB:-pdfdl}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    environment:
+      DOWNLOAD_ROOT: /data/Download
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Host-Seite über DOWNLOAD_HOST_DIR in .env konfigurierbar (Default: ./Download im
+      # Projektordner) - die Container-Seite (/data/Download) und DOWNLOAD_ROOT oben bleiben
+      # dabei unverändert, es ändert sich nur, WOHIN auf dem Host gespiegelt wird.
+      - ${DOWNLOAD_HOST_DIR:-./Download}:/data/Download
+      # Bind-Mount des Quellcodes, damit Uvicorn --reload Änderungen vom Host erkennt.
+      - ./app:/app/app
+      # Ebenfalls gemountet, damit neue Alembic-Migrationen/Entrypoint-Änderungen ohne
+      # Image-Rebuild verfügbar sind.
+      - ./migrations:/app/migrations
+      - ./scripts:/app/scripts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3

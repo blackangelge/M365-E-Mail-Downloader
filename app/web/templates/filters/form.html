@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Filter - PDF Download M365{% endblock %}
+{% block content %}
+<h1>{{ "Filter bearbeiten" if detail else "Neuer Filter" }}</h1>
+
+<form class="card" method="post" action="{{ '/filters/' ~ detail.filter_set.id if detail else '/filters' }}">
+  <label for="name">Name</label>
+  <input type="text" id="name" name="name" required value="{{ detail.filter_set.name if detail else '' }}" placeholder="z.B. Rechnungen ohne Mahnungen">
+
+  <label for="date_from">Datum von (TT.MM.JJJJ, leer = unbegrenzt)</label>
+  <input type="text" class="date-de" id="date_from" name="date_from" inputmode="numeric" maxlength="10"
+         placeholder="TT.MM.JJJJ" pattern="\d{2}\.\d{2}\.\d{4}" title="Format: TT.MM.JJJJ"
+         value="{{ detail.filter_set.date_from | date_de if detail and detail.filter_set.date_from else '' }}">
+  <label for="date_to">Datum bis (TT.MM.JJJJ, leer = unbegrenzt)</label>
+  <input type="text" class="date-de" id="date_to" name="date_to" inputmode="numeric" maxlength="10"
+         placeholder="TT.MM.JJJJ" pattern="\d{2}\.\d{2}\.\d{4}" title="Format: TT.MM.JJJJ"
+         value="{{ detail.filter_set.date_to | date_de if detail and detail.filter_set.date_to else '' }}">
+
+  <label for="extensions">Dateiendungen (kommagetrennt)</label>
+  <input type="text" id="extensions" name="extensions" required
+         value="{{ detail.extensions | map(attribute='extension') | join(', ') if detail else '.pdf' }}"
+         placeholder=".pdf, .docx">
+
+  <label for="keywords">Ausschluss-Keywords (kommagetrennt, Groß-/Kleinschreibung egal, leer = keine Ausschlüsse)</label>
+  <input type="text" id="keywords" name="keywords"
+         value="{{ detail.keywords | map(attribute='keyword_display') | join(', ') if detail else '' }}"
+         placeholder="Avis, Zahlungserinnerung">
+  <p class="hint">
+    Dies ist ein <strong>Ausschluss</strong>-Filter: Ein Anhang wird heruntergeladen, wenn seine Endung passt UND
+    <strong>keines</strong> der Keywords im Betreff oder im Dateinamen vorkommt. Enthält der Betreff oder Dateiname
+    eines dieser Wörter, wird der Anhang übersprungen.
+  </p>
+
+  <div style="margin-top:20px;">
+    <button class="btn" type="submit">Speichern</button>
+    <a class="btn secondary" href="/filters">Abbrechen</a>
+  </div>
+</form>
+{% endblock %}

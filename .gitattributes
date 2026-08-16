@@ -1,0 +1,6 @@
+# Shell-Skripte müssen LF-Zeilenenden behalten (laufen im Linux-Container) - sonst schlägt
+# das Shebang "#!/usr/bin/env bash" nach einem Checkout unter Windows fehl.
+*.sh text eol=lf
+
+# Restliche Textdateien: normalisiert, aber plattformabhängige Zeilenenden beim Checkout.
+* text=auto

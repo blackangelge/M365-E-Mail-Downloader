@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Kalender - PDF Download M365{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Kalender - {{ month_name }}</h1>
+  <div>
+    <a class="btn secondary" href="/calendar?year={{ prev_year }}&month={{ prev_month }}">&larr; Vorheriger Monat</a>
+    <a class="btn secondary" href="/calendar?year={{ next_year }}&month={{ next_month }}">Nächster Monat &rarr;</a>
+  </div>
+</div>
+<p class="hint">Zeigt den Tag, an dem die E-Mail empfangen wurde (nicht den Download-Zeitpunkt) - der Download-Zeitpunkt ist zusätzlich in den Tages-Details sichtbar.</p>
+
+<div class="calendar-grid" style="margin-bottom:10px;">
+  {% for wd in ["Mo","Di","Mi","Do","Fr","Sa","So"] %}
+  <div class="muted" style="text-align:center;font-size:12px;">{{ wd }}</div>
+  {% endfor %}
+</div>
+
+<div class="calendar-grid" id="calendar-body">
+  {% for week in weeks %}
+    {% for day in week %}
+      {% if day %}
+      <div class="calendar-cell" hx-get="/calendar/day/{{ day.date.isoformat() }}" hx-target="#day-detail" hx-swap="innerHTML"
+           style="{{ 'border-color:var(--accent);' if day.date == today else '' }}">
+        <div class="day-num">{{ day.date.day }}</div>
+        {% if day.count > 0 %}<div class="day-count">{{ day.count }}</div>{% endif %}
+        {% if day.duplicate_count > 0 %}<div class="hint" style="margin-top:2px;">+{{ day.duplicate_count }} Duplikat{{ "e" if day.duplicate_count != 1 else "" }}</div>{% endif %}
+      </div>
+      {% else %}
+      <div class="calendar-cell empty"></div>
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+</div>
+
+<h2>Details</h2>
+<div id="day-detail" class="card"><p class="muted">Auf einen Tag mit Downloads klicken, um Details zu sehen.</p></div>
+{% endblock %}

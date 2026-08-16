@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PDF Download M365{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/date-input.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="brand">📄 PDF Download M365</div>
+      <a href="/" class="{{ 'active' if active_nav == 'dashboard' else '' }}">Dashboard</a>
+      <a href="/tenants" class="{{ 'active' if active_nav == 'tenants' else '' }}">Tenants</a>
+      <a href="/mailboxes" class="{{ 'active' if active_nav == 'mailboxes' else '' }}">Postfächer</a>
+      <a href="/filters" class="{{ 'active' if active_nav == 'filters' else '' }}">Filter</a>
+      <a href="/jobs" class="{{ 'active' if active_nav == 'jobs' else '' }}">Jobs</a>
+      <a href="/calendar" class="{{ 'active' if active_nav == 'calendar' else '' }}">Kalender</a>
+      <a href="/logs" class="{{ 'active' if active_nav == 'logs' else '' }}">Logs</a>
+    </nav>
+    <main>
+      {% if request.query_params.get('msg') %}
+        <div class="flash success">{{ request.query_params.get('msg') }}</div>
+      {% endif %}
+      {% if request.query_params.get('err') %}
+        <div class="flash error">{{ request.query_params.get('err') }}</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

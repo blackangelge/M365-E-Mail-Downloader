@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Filter - PDF Download M365{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Filter</h1>
+  <a class="btn" href="/filters/new">+ Neuer Filter</a>
+</div>
+
+<div class="card">
+  {% if filter_sets %}
+  <table>
+    <thead><tr><th>Name</th><th>Zeitraum</th><th>Endungen</th><th>Ausschluss-Keywords</th><th>Verwendet von</th><th></th></tr></thead>
+    <tbody>
+      {% for fs in filter_sets %}
+      <tr>
+        <td>{{ fs.name }}</td>
+        <td class="muted">
+          {% if fs.date_from or fs.date_to %}{{ fs.date_from | date_de if fs.date_from else "beliebig" }} &ndash; {{ fs.date_to | date_de if fs.date_to else "unbegrenzt" }}
+          {% else %}unbegrenzt{% endif %}
+        </td>
+        <td class="muted">{{ fs.extensions | map(attribute='extension') | join(', ') }}</td>
+        <td class="muted">{{ fs.keywords | map(attribute='keyword_display') | join(', ') or '-' }}</td>
+        <td>{{ usage_counts.get(fs.id, 0) }} Job(s)</td>
+        <td>
+          <a class="btn small secondary" href="/filters/{{ fs.id }}/edit">Bearbeiten</a>
+          <form class="inline" method="post" action="/filters/{{ fs.id }}/delete" onsubmit="return confirm('Filter {{ fs.name }} wirklich löschen?');">
+            <button class="btn small danger" type="submit">Löschen</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Noch keine Filter angelegt.</p>
+  {% endif %}
+</div>
+{% endblock %}
