@@ -4,6 +4,14 @@
 <h1>System-Ereignisse</h1>
 <p class="hint">Download-Ordner-Prüfung beim Start und alle Verbindungsversuche zu M365 (automatisch bei jedem Sync sowie manuelle Tests).</p>
 
+<div class="card">
+  <h2 style="margin-top:0">Download-Ordner testen</h2>
+  <p class="hint">Legt sofort eine kleine Textdatei in <code>{{ download_host_dir }}/</code> an, um zu prüfen, dass der Ordner beschreibbar ist - ohne auf eine echte E-Mail warten zu müssen.</p>
+  <form method="post" action="/system/test-file">
+    <button class="btn" type="submit">Test-Textdatei erstellen</button>
+  </form>
+</div>
+
 <form class="card" method="get" action="/system">
   <label for="category">Kategorie</label>
   <select id="category" name="category" onchange="this.form.submit()">

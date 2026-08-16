@@ -2,19 +2,62 @@
 Weboberfläche sichtbar statt nur in den Docker-Container-Logs (siehe app/events.py)."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_session
-from app.models import EventCategory, Mailbox, SystemEvent, Tenant
+from app.events import log_event
+from app.models import EventCategory, EventLevel, Mailbox, SystemEvent, Tenant
 from app.web.templating import templates
+from app.workers.storage import write_once
 
 router = APIRouter(prefix="/system")
 
 _PAGE_SIZE = 50
+
+
+@router.post("/test-file")
+async def create_test_file(session: Annotated[AsyncSession, Depends(get_session)]):
+    """Legt eine simple Test-Textdatei direkt im Download-Ordner an - schneller Weg, um zu
+    prüfen, dass der Ordner beschreibbar und korrekt gemountet ist, ohne auf eine echte E-Mail
+    warten zu müssen."""
+    settings = get_settings()
+    timestamp = datetime.now(timezone.utc)
+    filename = f"testdatei_{timestamp.strftime('%Y%m%d_%H%M%S')}.txt"
+    target_path = settings.download_root / filename
+    content = (
+        f"Testdatei von PDF Download M365\n"
+        f"Erstellt am: {timestamp.isoformat()}\n"
+        f"Wenn diese Datei sichtbar ist, funktioniert der Download-Ordner-Mount korrekt.\n"
+    ).encode("utf-8")
+
+    try:
+        write_once(target_path, content)
+        await log_event(
+            session,
+            category=EventCategory.STARTUP,
+            level=EventLevel.INFO,
+            message=f"Testdatei erfolgreich angelegt: {filename}",
+        )
+        return RedirectResponse(
+            f"/system?msg=Testdatei+angelegt%3A+{quote(settings.download_host_dir.rstrip('/'))}%2F{quote(filename)}",
+            status_code=303,
+        )
+    except OSError as exc:
+        await log_event(
+            session,
+            category=EventCategory.STARTUP,
+            level=EventLevel.ERROR,
+            message=f"Testdatei konnte nicht angelegt werden: {exc}",
+        )
+        return RedirectResponse(f"/system?err=Testdatei+fehlgeschlagen%3A+{quote(str(exc))}", status_code=303)
 
 
 @router.get("")
