@@ -40,3 +40,9 @@ def _format_date(value, fmt: str = "%d.%m.%Y") -> str:
 
 templates.env.filters["datetime_de"] = _format_datetime
 templates.env.filters["date_de"] = _format_date
+
+# In jedem Template als {{ download_host_dir }} verfügbar - der echte Host-Pfad, unter dem
+# Downloads tatsächlich zu finden sind (siehe app/config.py), statt nur des intern immer
+# gleichbleibenden Container-Pfads.
+download_host_dir = get_settings().download_host_dir.rstrip("/\\")
+templates.env.globals["download_host_dir"] = download_host_dir

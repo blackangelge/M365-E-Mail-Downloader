@@ -52,6 +52,16 @@ class SyncStatus(str, enum.Enum):
     ERROR = "error"
 
 
+class EventCategory(str, enum.Enum):
+    STARTUP = "startup"  # z.B. Download-Ordner-Mount-Prüfung
+    GRAPH_CONNECTION = "graph_connection"  # M365-Verbindungsversuche (Sync + manueller Test)
+
+
+class EventLevel(str, enum.Enum):
+    INFO = "info"
+    ERROR = "error"
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -285,3 +295,21 @@ class AttachmentSighting(Base):
     filename_on_email: Mapped[str] = mapped_column(String(1024), nullable=False)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     is_new_download: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class SystemEvent(Base):
+    """Betriebs-Ereignisse, die in der Weboberfläche sichtbar sein sollen, statt nur in den
+    Docker-Container-Logs zu verschwinden: Download-Ordner-Mount-Prüfung beim Start, sowie jeder
+    Verbindungsversuch zu M365 (Sync-Läufe und manuelle "Verbindung testen"-Klicks)."""
+
+    __tablename__ = "system_events"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    category: Mapped[EventCategory] = mapped_column(_pg_enum(EventCategory, "event_category"), nullable=False)
+    level: Mapped[EventLevel] = mapped_column(_pg_enum(EventLevel, "event_level"), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True)
+    mailbox_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("mailboxes.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

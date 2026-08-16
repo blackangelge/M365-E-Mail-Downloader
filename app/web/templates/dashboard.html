@@ -44,7 +44,7 @@
         <td>{{ r.sighting.seen_at | datetime_de }}</td>
         <td>{{ r.email.subject or "-" }}</td>
         <td>{{ r.file.original_filename }}</td>
-        <td class="muted">{{ r.file.stored_path }}</td>
+        <td class="muted" title="Tatsächlicher Speicherort auf dem Host">{{ download_host_dir }}/{{ r.file.stored_path }}</td>
       </tr>
       {% endfor %}
     </tbody>

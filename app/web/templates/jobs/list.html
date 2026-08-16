@@ -16,7 +16,7 @@
         <td>{{ row.job.name }}</td>
         <td>{{ row.tenant.name }}</td>
         <td><a href="/filters/{{ row.filter_set.id }}/edit">{{ row.filter_set.name }}</a></td>
-        <td class="muted">Download/{{ row.job.target_subfolder }}/</td>
+        <td class="muted" title="Tatsächlicher Speicherort auf dem Host">{{ download_host_dir }}/{{ row.job.target_subfolder }}/</td>
         <td>{{ row.job.poll_interval_minutes }} min</td>
         <td>
           {% if row.job.auto_completed %}<span class="badge idle">abgeschlossen (Enddatum erreicht)</span>

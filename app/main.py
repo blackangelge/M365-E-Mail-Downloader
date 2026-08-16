@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,18 +12,50 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.config import get_settings
-from app.database import engine
+from app.database import async_session_factory, engine
+from app.events import log_event
+from app.models import EventCategory, EventLevel
 from app.security.auth import require_admin
-from app.web.routers import calendar, dashboard, filters, jobs, logs, mailboxes, tenants
+from app.web.routers import calendar, dashboard, filters, jobs, logs, mailboxes, system, tenants
 from app.workers.procrastinate_app import app as procrastinate_app
 
 _BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger("app")
 
 
+async def _check_download_root_mount() -> None:
+    """Bestätigt beim Start, dass DOWNLOAD_ROOT tatsächlich von einem Host-Verzeichnis gemountet
+    ist (dieselbe Prüfung wie in scripts/entrypoint.sh, hier zusätzlich DB-persistiert, damit das
+    Ergebnis in der Weboberfläche sichtbar ist statt nur in den Container-Logs)."""
+    root = get_settings().download_root
+    root.mkdir(parents=True, exist_ok=True)
+    mounted_correctly = os.stat(root).st_dev != os.stat(root.parent).st_dev
+
+    async with async_session_factory() as session:
+        if mounted_correctly:
+            await log_event(
+                session,
+                category=EventCategory.STARTUP,
+                level=EventLevel.INFO,
+                message=f"Download-Ordner-Prüfung erfolgreich: {root} ist vom Host gemountet.",
+            )
+        else:
+            await log_event(
+                session,
+                category=EventCategory.STARTUP,
+                level=EventLevel.ERROR,
+                message=(
+                    f"Download-Ordner-Prüfung fehlgeschlagen: {root} scheint NICHT von einem "
+                    f"Host-Verzeichnis gemountet zu sein. Downloads würden nur im Container "
+                    f"landen und bei einem Neustart verloren gehen. DOWNLOAD_HOST_DIR in .env prüfen."
+                ),
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(level=get_settings().log_level)
+    await _check_download_root_mount()
 
     async with procrastinate_app.open_async():
         worker_task = asyncio.create_task(
@@ -57,6 +90,7 @@ def create_app() -> FastAPI:
     fastapi_app.include_router(jobs.router, dependencies=protected)
     fastapi_app.include_router(calendar.router, dependencies=protected)
     fastapi_app.include_router(logs.router, dependencies=protected)
+    fastapi_app.include_router(system.router, dependencies=protected)
 
     @fastapi_app.get("/healthz")
     async def healthz() -> dict:

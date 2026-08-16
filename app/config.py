@@ -16,6 +16,12 @@ class Settings(BaseSettings):
 
     download_root: Path = Path("/data/Download")
 
+    # Nur zur Anzeige in der Weboberfläche: der tatsächliche Host-Pfad, auf den DOWNLOAD_ROOT
+    # gemountet ist (siehe docker-compose.yml). Der Container selbst arbeitet ausschließlich mit
+    # download_root - dieser Wert dient nur dazu, dem Nutzer den echten Speicherort anzuzeigen,
+    # statt immer nur den intern gleichbleibenden Container-Pfad.
+    download_host_dir: str = "./Download"
+
     app_timezone: str = "Europe/Berlin"
 
     port: int = 4000

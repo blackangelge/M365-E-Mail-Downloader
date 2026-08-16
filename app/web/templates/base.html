@@ -19,6 +19,7 @@
       <a href="/jobs" class="{{ 'active' if active_nav == 'jobs' else '' }}">Jobs</a>
       <a href="/calendar" class="{{ 'active' if active_nav == 'calendar' else '' }}">Kalender</a>
       <a href="/logs" class="{{ 'active' if active_nav == 'logs' else '' }}">Logs</a>
+      <a href="/system" class="{{ 'active' if active_nav == 'system' else '' }}">System</a>
     </nav>
     <main>
       {% if request.query_params.get('msg') %}

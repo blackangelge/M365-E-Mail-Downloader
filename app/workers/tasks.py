@@ -18,11 +18,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import get_settings
 from app.database import async_session_factory
+from app.events import log_event
 from app.graph.attachments import download_single_attachment, list_and_download_attachments
 from app.graph.client_factory import get_graph_client
 from app.graph.errors import PermanentGraphError
 from app.graph.mailbox_scanner import scan_mailbox_delta
 from app.models import (
+    EventCategory,
+    EventLevel,
     FilterSet,
     FilterSetExtension,
     FilterSetKeyword,
@@ -111,6 +114,11 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
             return
 
         sync_state = await session.get(MailboxSyncState, mailbox_uuid)
+        # Vorheriger Status wird festgehalten, um unten zu erkennen, ob sich gerade etwas
+        # AENDERT (Fehler behoben / erster Verbindungsversuch) - nur solche Übergänge werden als
+        # "graph_connection"-Ereignis protokolliert, nicht jeder einzelne erfolgreiche Sync-Lauf,
+        # damit die Ereignisliste bei kurzen Poll-Intervallen nicht zuflutet.
+        previous_status = sync_state.status if sync_state else None
         if sync_state is None:
             sync_state = MailboxSyncState(mailbox_id=mailbox_uuid, status=SyncStatus.IDLE)
             session.add(sync_state)
@@ -155,11 +163,32 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
 
                 await session.commit()
 
+        if previous_status != SyncStatus.IDLE:
+            # Erster erfolgreicher Verbindungsversuch oder Erholung nach einem Fehler.
+            async with async_session_factory() as session:
+                await log_event(
+                    session,
+                    category=EventCategory.GRAPH_CONNECTION,
+                    level=EventLevel.INFO,
+                    message=f"Verbindung zu M365 erfolgreich (Postfach {mailbox.email_address}).",
+                    tenant_id=tenant.id,
+                    mailbox_id=mailbox_uuid,
+                )
+
     except PermanentGraphError as exc:
         async with async_session_factory() as session:
             sync_state = await session.get(MailboxSyncState, mailbox_uuid)
             sync_state.status = SyncStatus.ERROR
             sync_state.last_error = str(exc)
+            await log_event(
+                session,
+                category=EventCategory.GRAPH_CONNECTION,
+                level=EventLevel.ERROR,
+                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                tenant_id=tenant.id,
+                mailbox_id=mailbox_uuid,
+                commit=False,
+            )
             await session.commit()
         return  # kein Retry, kein Weiterlaufen zur Auswertung
 
@@ -173,6 +202,15 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
             sync_state = await session.get(MailboxSyncState, mailbox_uuid)
             sync_state.status = SyncStatus.ERROR
             sync_state.last_error = str(exc)
+            await log_event(
+                session,
+                category=EventCategory.GRAPH_CONNECTION,
+                level=EventLevel.ERROR,
+                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                tenant_id=tenant.id,
+                mailbox_id=mailbox_uuid,
+                commit=False,
+            )
             await session.commit()
         raise
 

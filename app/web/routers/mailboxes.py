@@ -11,8 +11,19 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
+from app.events import log_event
 from app.graph.client_factory import test_mailbox_access
-from app.models import AttachmentFile, Job, JobMailbox, Mailbox, MailboxSyncState, ProcessedEmail, Tenant
+from app.models import (
+    AttachmentFile,
+    EventCategory,
+    EventLevel,
+    Job,
+    JobMailbox,
+    Mailbox,
+    MailboxSyncState,
+    ProcessedEmail,
+    Tenant,
+)
 from app.web.templating import templates
 
 router = APIRouter(prefix="/mailboxes")
@@ -134,5 +145,22 @@ async def test_mailbox(mailbox_id: uuid.UUID, session: Annotated[AsyncSession, D
     tenant = await session.get(Tenant, mailbox.tenant_id)
     ok, error = await test_mailbox_access(tenant, mailbox.email_address)
     if ok:
+        await log_event(
+            session,
+            category=EventCategory.GRAPH_CONNECTION,
+            level=EventLevel.INFO,
+            message=f"Manueller Verbindungstest erfolgreich (Postfach {mailbox.email_address}).",
+            tenant_id=tenant.id,
+            mailbox_id=mailbox.id,
+        )
         return RedirectResponse(f"/mailboxes?msg=Verbindung+zu+{quote(mailbox.email_address)}+erfolgreich", status_code=303)
+
+    await log_event(
+        session,
+        category=EventCategory.GRAPH_CONNECTION,
+        level=EventLevel.ERROR,
+        message=f"Manueller Verbindungstest fehlgeschlagen (Postfach {mailbox.email_address}): {error}",
+        tenant_id=tenant.id,
+        mailbox_id=mailbox.id,
+    )
     return RedirectResponse(f"/mailboxes?err={quote(error or 'Verbindungstest fehlgeschlagen')}", status_code=303)

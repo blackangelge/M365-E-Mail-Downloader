@@ -46,10 +46,10 @@
 
   <fieldset>
     <legend>Ablage &amp; Zeitplan</legend>
-    <label for="target_subfolder">Zielordner (unter Download/)</label>
+    <label for="target_subfolder">Zielordner (unter {{ download_host_dir }}/)</label>
     <input type="text" id="target_subfolder" name="target_subfolder" required
            value="{{ detail.job.target_subfolder if detail else '' }}" placeholder="firma-a-rechnungen">
-    <p class="hint">Nur ein einzelner Ordnername, kein Pfad. Schrägstriche und Sonderzeichen werden automatisch durch "_" ersetzt.</p>
+    <p class="hint">Nur ein einzelner Ordnername, kein Pfad. Schrägstriche und Sonderzeichen werden automatisch durch "_" ersetzt. Dateien landen unter <code>{{ download_host_dir }}/&lt;Ordnername&gt;/</code>.</p>
     <label for="poll_interval_minutes">Prüfintervall (Minuten)</label>
     <input type="number" id="poll_interval_minutes" name="poll_interval_minutes" min="1" required
            value="{{ detail.job.poll_interval_minutes if detail else 15 }}">

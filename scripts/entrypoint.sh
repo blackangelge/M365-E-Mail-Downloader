@@ -1,6 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "[entrypoint] Prüfe DOWNLOAD_ROOT-Mount..."
+# Das Dockerfile legt DOWNLOAD_ROOT bereits im Image an (Sicherheitsnetz für den Fall, dass
+# überhaupt kein Bind-Mount konfiguriert ist). Das hat aber einen gefährlichen Nebeneffekt: legt
+# man DOWNLOAD_HOST_DIR (siehe docker-compose.yml) auf einen Host-Pfad, der (noch) nicht
+# existiert, mountet Docker auf manchen Setups (u.a. Docker Desktop unter Windows) NICHT auf den
+# Host durch - es bleibt einfach das leere Verzeichnis aus dem Image übrig. Die App würde dann
+# scheinbar erfolgreich Dateien schreiben, die aber nur in der Container-Schreibschicht landen
+# und beim nächsten Neustart kommentarlos verloren gehen. Diese Prüfung bricht deshalb LAUT ab,
+# statt das still geschehen zu lassen: ein echter Bind-Mount hat immer eine andere Geräte-ID
+# (st_dev) als sein Elternverzeichnis (das noch im Image-Layer liegt); sind beide gleich, wurde
+# nichts vom Host eingehängt.
+python - <<'PYEOF'
+import os
+import sys
+
+from app.config import get_settings
+
+root = get_settings().download_root
+root.mkdir(parents=True, exist_ok=True)
+
+if os.stat(root).st_dev == os.stat(root.parent).st_dev:
+    sys.exit(
+        f"[entrypoint] ABBRUCH: {root} scheint NICHT von einem Host-Verzeichnis gemountet zu "
+        f"sein (gleiche Geräte-ID wie {root.parent} - vermutlich nur der leere Ordner aus dem "
+        f"Image). Downloads würden sonst beim nächsten Neustart kommentarlos verloren gehen. "
+        f"Prüfe DOWNLOAD_HOST_DIR in .env: der Zielordner muss auf dem Host existieren, bevor "
+        f"der Container gestartet wird."
+    )
+print(f"[entrypoint] {root} ist korrekt vom Host gemountet.")
+PYEOF
+
 echo "[entrypoint] Warte auf Postgres..."
 python - <<'PYEOF'
 import sys

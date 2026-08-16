@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}System-Ereignisse - PDF Download M365{% endblock %}
+{% block content %}
+<h1>System-Ereignisse</h1>
+<p class="hint">Download-Ordner-Prüfung beim Start und alle Verbindungsversuche zu M365 (automatisch bei jedem Sync sowie manuelle Tests).</p>
+
+<form class="card" method="get" action="/system">
+  <label for="category">Kategorie</label>
+  <select id="category" name="category" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not category else '' }}>Alle</option>
+    <option value="startup" {{ 'selected' if category == 'startup' else '' }}>Download-Ordner-Prüfung</option>
+    <option value="graph_connection" {{ 'selected' if category == 'graph_connection' else '' }}>M365-Verbindung</option>
+  </select>
+</form>
+
+<div class="card">
+  {% if events %}
+  <table>
+    <thead><tr><th>Zeitpunkt</th><th>Kategorie</th><th>Status</th><th>Tenant</th><th>Postfach</th><th>Meldung</th></tr></thead>
+    <tbody>
+      {% for row in events %}
+      <tr>
+        <td>{{ row.event.created_at | datetime_de }}</td>
+        <td class="muted">{{ "Ordner-Prüfung" if row.event.category.value == "startup" else "M365-Verbindung" }}</td>
+        <td>
+          {% if row.event.level.value == "error" %}<span class="badge err">Fehler</span>
+          {% else %}<span class="badge ok">OK</span>{% endif %}
+        </td>
+        <td>{{ row.tenant.name if row.tenant else "-" }}</td>
+        <td>{{ row.mailbox.email_address if row.mailbox else "-" }}</td>
+        <td>{{ row.event.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="pagination">
+    {% if page > 1 %}<a class="btn secondary" href="?category={{ category }}&page={{ page - 1 }}">&larr; Zurück</a>{% endif %}
+    <span class="muted" style="align-self:center;">Seite {{ page }}</span>
+    {% if has_next %}<a class="btn secondary" href="?category={{ category }}&page={{ page + 1 }}">Weiter &rarr;</a>{% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Noch keine Ereignisse aufgezeichnet.</p>
+  {% endif %}
+</div>
+{% endblock %}
