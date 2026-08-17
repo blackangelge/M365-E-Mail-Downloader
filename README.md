@@ -64,9 +64,14 @@ danach `docker compose up -d` (siehe Hinweis unten zu `.env`-Änderungen). `DOWN
 **Auf nativem Linux-Docker** (anders als Docker Desktop unter Windows/Mac, das das meist
 transparent überbrückt) läuft die App bewusst nicht als root - daher muss die UID/GID des
 Container-Prozesses zum Besitzer der gemounteten Host-Ordner passen, sonst gibt es
-"Permission denied". Statt den Host-Ordner auf eine feste Container-UID zu chownen, passt sich
-der Container beim Start selbst an: `PUID`/`PGID` in `.env` auf die UID/GID setzen, der/die
-`DOWNLOAD_HOST_DIR` auf dem Host bereits gehört (ermitteln mit `id -u` / `id -g`), z.B.:
+"Permission denied". Das passiert **automatisch**: `scripts/entrypoint.sh` liest beim Start per
+`stat` den tatsächlichen Besitzer von `DOWNLOAD_HOST_DIR` auf dem Host aus und übernimmt dessen
+UID/GID - kein manuelles Nachschlagen mit `id -u`/`id -g` nötig. Gehört der Ordner ausnahmsweise
+`root` (z.B. weil er gerade erst neu angelegt wurde), weicht der Container auf UID/GID `1000` aus
+und übereignet sich nur die oberste Ordnerebene selbst (nicht rekursiv).
+
+Nur für Sonderfälle (z.B. Netzlaufwerk, gewünschter abweichender Besitzer) lässt sich das in
+`.env` manuell überschreiben - gesetzte Werte haben dann Vorrang vor der Auto-Erkennung:
 
 ```bash
 # In .env:
@@ -74,9 +79,9 @@ PUID=1000
 PGID=1000
 ```
 
-(Standard-Pattern u.a. aus den LinuxServer.io-Images.) Der Container prüft die Schreibrechte
-beim Start selbst und bricht mit einer klaren Fehlermeldung ab, falls es nicht passt - sichtbar
-sowohl in `docker compose logs app` als auch auf der `/system`-Seite in der Weboberfläche.
+Der Container prüft die Schreibrechte beim Start zusätzlich selbst und bricht mit einer klaren
+Fehlermeldung ab, falls trotzdem etwas nicht passt - sichtbar sowohl in `docker compose logs app`
+als auch auf der `/system`-Seite in der Weboberfläche.
 
 Bei jedem Start führt `scripts/entrypoint.sh` automatisch `alembic upgrade head` aus und wendet
 das Procrastinate-Schema nur beim allerersten Start an (die dazugehörige Sentinel-Tabelle wird

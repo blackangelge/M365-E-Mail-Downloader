@@ -7,12 +7,37 @@ set -euo pipefail
 # Best Practice) - dafür muss die UID/GID des Container-Users zu der des Host-Ordners passen,
 # sonst schlägt jeder Schreibversuch auf nativem Linux-Docker mit "Permission denied" fehl
 # (anders als z.B. auf Docker Desktop unter Windows/Mac, das das meist transparent überbrückt).
-# Statt vom Nutzer zu verlangen, seinen Host-Ordner auf eine feste Container-UID zu chownen, passt
-# sich der Container hier an: PUID/PGID in .env auf die UID/GID setzen, der/die der Host-Ordner
-# (DOWNLOAD_HOST_DIR) bereits gehört - Standard-Pattern u.a. aus den LinuxServer.io-Images.
-# Default 1000:1000 (die im Image fest angelegte appuser-UID/GID) für Rückwärtskompatibilität.
-PUID="${PUID:-1000}"
-PGID="${PGID:-1000}"
+#
+# Standardmäßig wird das automatisch erkannt: der tatsächliche Besitzer von DOWNLOAD_ROOT (also
+# des gemounteten Host-Ordners DOWNLOAD_HOST_DIR) wird per "stat" ausgelesen und übernommen - kein
+# manuelles Nachschlagen von UID/GID nötig. Gehört der Ordner ausnahmsweise root (z.B. weil er
+# noch gar nicht existierte und frisch angelegt wurde), weicht der Container auf UID/GID 1000 aus
+# und übereignet sich NUR die oberste Ordnerebene (nicht rekursiv - der Ordner kann bereits viele
+# vorhandene Dateien mit anderem Besitzer enthalten, die dabei nicht angefasst werden sollen).
+# PUID/PGID in .env setzen, um das für Sonderfälle (z.B. Netzlaufwerk) manuell zu überschreiben -
+# gesetzte Werte haben immer Vorrang vor der Auto-Erkennung.
+DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-/data/Download}"
+PUID="${PUID:-}"
+PGID="${PGID:-}"
+
+if [ -z "$PUID" ] || [ -z "$PGID" ]; then
+    mkdir -p "$DOWNLOAD_ROOT"
+    DETECTED_UID="$(stat -c '%u' "$DOWNLOAD_ROOT")"
+    DETECTED_GID="$(stat -c '%g' "$DOWNLOAD_ROOT")"
+
+    if [ "$DETECTED_UID" = "0" ]; then
+        echo "[entrypoint] $DOWNLOAD_ROOT gehört root - weiche auf UID/GID 1000 aus und übereigne die oberste Ordnerebene."
+        DETECTED_UID=1000
+        DETECTED_GID=1000
+        chown 1000:1000 "$DOWNLOAD_ROOT"
+    fi
+
+    PUID="${PUID:-$DETECTED_UID}"
+    PGID="${PGID:-$DETECTED_GID}"
+    echo "[entrypoint] Automatisch erkannt: PUID=$PUID PGID=$PGID (Besitzer von $DOWNLOAD_ROOT)."
+else
+    echo "[entrypoint] PUID/PGID manuell gesetzt: PUID=$PUID PGID=$PGID."
+fi
 
 if [ "$(id -u appuser)" != "$PUID" ]; then
     echo "[entrypoint] Passe UID von appuser an PUID=$PUID an..."

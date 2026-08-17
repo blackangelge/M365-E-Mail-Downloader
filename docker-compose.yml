@@ -33,11 +33,13 @@ services:
       # sonst nur seinen eigenen Pfad /data/Download und nicht, wohin das auf dem Host tatsächlich
       # gemountet ist. Für Dateizugriffe spielt das keine Rolle, nur für die UI-Anzeige des Pfads.
       DOWNLOAD_HOST_DIR: ${DOWNLOAD_HOST_DIR:-./Download}
-      # UID/GID, zu denen der Container-Prozess beim Start wechselt (siehe entrypoint.sh) -
-      # auf die UID/GID setzen, der/die DOWNLOAD_HOST_DIR auf dem Host bereits gehört (unter
-      # Linux z.B. mit "id -u"/"id -g" ermitteln). Default 1000:1000.
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
+      # UID/GID, zu denen der Container-Prozess beim Start wechselt (siehe entrypoint.sh).
+      # Standardmäßig LEER gelassen: entrypoint.sh erkennt dann automatisch per "stat" den
+      # Besitzer von DOWNLOAD_HOST_DIR auf dem Host und übernimmt dessen UID/GID. Hier nur zum
+      # manuellen Überschreiben setzen (z.B. Netzlaufwerk-Sonderfälle) - überschriebene Werte
+      # haben immer Vorrang vor der Auto-Erkennung.
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
     depends_on:
       db:
         condition: service_healthy
