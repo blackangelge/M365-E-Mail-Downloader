@@ -3,16 +3,23 @@
 {% block content %}
 <h1>{{ "Job bearbeiten" if detail else "Neuer Job" }}</h1>
 
+{% if error %}
+<div class="flash error">{{ error }}</div>
+{% endif %}
+
 <form class="card" method="post" action="{{ '/jobs/' ~ detail.job.id if detail else '/jobs' }}">
   <label for="name">Job-Name</label>
-  <input type="text" id="name" name="name" required value="{{ detail.job.name if detail else '' }}">
+  <input type="text" id="name" name="name" required
+         value="{{ detail.job.name if detail else (prefill.name if prefill else '') }}">
 
   {% if not detail %}
   <label for="tenant_id">Tenant</label>
   <select id="tenant_id" name="tenant_id" required
           onchange="htmx.ajax('GET', '/jobs/mailboxes-for-tenant/' + this.value, {target:'#mailbox-list', swap:'innerHTML'})">
-    <option value="" disabled selected>Bitte wählen</option>
-    {% for t in tenants %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+    <option value="" disabled {{ '' if prefill else 'selected' }}>Bitte wählen</option>
+    {% for t in tenants %}
+    <option value="{{ t.id }}" {{ 'selected' if prefill and prefill.tenant_id == t.id else '' }}>{{ t.name }}</option>
+    {% endfor %}
   </select>
   {% else %}
   <p class="hint">Tenant: <strong>{{ detail.job.tenant_id }}</strong> (nach dem Anlegen nicht mehr änderbar)</p>
@@ -23,6 +30,9 @@
     {% if detail %}
       {% set selected_ids = detail.mailboxes | map(attribute='id') | list %}
       {% include "jobs/partials/mailbox_checkboxes.html" with context %}
+    {% elif prefill %}
+      {% set selected_ids = prefill.mailbox_ids %}
+      {% include "jobs/partials/mailbox_checkboxes.html" with context %}
     {% else %}
       <p class="muted">Bitte zuerst einen Tenant auswählen.</p>
     {% endif %}
@@ -32,9 +42,9 @@
     <legend>Filter</legend>
     <label for="filter_set_id">Zu verwendender Filter</label>
     <select id="filter_set_id" name="filter_set_id" required>
-      <option value="" disabled {{ '' if detail else 'selected' }}>Bitte wählen</option>
+      <option value="" disabled {{ '' if (detail or prefill) else 'selected' }}>Bitte wählen</option>
       {% for fs in filter_sets %}
-      <option value="{{ fs.id }}" {{ 'selected' if detail and detail.filter_set.id == fs.id else '' }}>{{ fs.name }}</option>
+      <option value="{{ fs.id }}" {{ 'selected' if (detail and detail.filter_set.id == fs.id) or (prefill and prefill.filter_set_id == fs.id) else '' }}>{{ fs.name }}</option>
       {% endfor %}
     </select>
     {% if filter_sets %}
@@ -48,11 +58,11 @@
     <legend>Ablage &amp; Zeitplan</legend>
     <label for="target_subfolder">Zielordner (unter {{ download_host_dir }}/)</label>
     <input type="text" id="target_subfolder" name="target_subfolder" required
-           value="{{ detail.job.target_subfolder if detail else '' }}" placeholder="firma-a-rechnungen">
+           value="{{ detail.job.target_subfolder if detail else (prefill.target_subfolder if prefill else '') }}" placeholder="firma-a-rechnungen">
     <p class="hint">Nur ein einzelner Ordnername, kein Pfad. Schrägstriche und Sonderzeichen werden automatisch durch "_" ersetzt. Dateien landen unter <code>{{ download_host_dir }}/&lt;Ordnername&gt;/</code>.</p>
     <label for="poll_interval_minutes">Prüfintervall (Minuten)</label>
     <input type="number" id="poll_interval_minutes" name="poll_interval_minutes" min="1" required
-           value="{{ detail.job.poll_interval_minutes if detail else 15 }}">
+           value="{{ detail.job.poll_interval_minutes if detail else (prefill.poll_interval_minutes if prefill else 15) }}">
   </fieldset>
 
   {% if detail %}

@@ -12,6 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import Date, and_, cast, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
@@ -131,10 +132,53 @@ async def new_job_form(request: Request, session: Annotated[AsyncSession, Depend
         {
             "active_nav": "jobs",
             "detail": None,
+            "prefill": None,
+            "error": None,
             "tenants": tenants_result.scalars().all(),
             "filter_sets": filter_sets_result.scalars().all(),
             "mailboxes": [],
         },
+    )
+
+
+async def _render_new_job_form_with_error(
+    request: Request,
+    session: AsyncSession,
+    *,
+    error: str,
+    name: str,
+    tenant_id: uuid.UUID,
+    filter_set_id: uuid.UUID,
+    target_subfolder: str,
+    poll_interval_minutes: int,
+    mailbox_ids: list[uuid.UUID],
+):
+    """Rendert das "Neuer Job"-Formular nach einem fehlgeschlagenen Speichern (z.B. Namenskonflikt)
+    erneut MIT den bereits eingegebenen Werten, statt sie wegzuwerfen und den Nutzer alles noch
+    einmal eintippen zu lassen."""
+    tenants_result = await session.execute(select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name))
+    filter_sets_result = await session.execute(select(FilterSet).order_by(FilterSet.name))
+    mailboxes_result = await session.execute(select(Mailbox).where(Mailbox.tenant_id == tenant_id))
+    return templates.TemplateResponse(
+        request,
+        "jobs/form.html",
+        {
+            "active_nav": "jobs",
+            "detail": None,
+            "error": error,
+            "prefill": {
+                "name": name,
+                "tenant_id": tenant_id,
+                "filter_set_id": filter_set_id,
+                "target_subfolder": target_subfolder,
+                "poll_interval_minutes": poll_interval_minutes,
+                "mailbox_ids": set(mailbox_ids),
+            },
+            "tenants": tenants_result.scalars().all(),
+            "filter_sets": filter_sets_result.scalars().all(),
+            "mailboxes": mailboxes_result.scalars().all(),
+        },
+        status_code=409,
     )
 
 
@@ -151,6 +195,8 @@ async def edit_job_form(request: Request, job_id: uuid.UUID, session: Annotated[
         {
             "active_nav": "jobs",
             "detail": detail,
+            "prefill": None,
+            "error": None,
             "tenants": tenants_result.scalars().all(),
             "filter_sets": filter_sets_result.scalars().all(),
             "mailboxes": mailboxes_result.scalars().all(),
@@ -175,6 +221,7 @@ async def _save_job_mailboxes(session: AsyncSession, job: Job, mailbox_ids: list
 
 @router.post("")
 async def create_job(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     name: Annotated[str, Form()],
     tenant_id: Annotated[uuid.UUID, Form()],
@@ -191,9 +238,26 @@ async def create_job(
         poll_interval_minutes=poll_interval_minutes,
     )
     session.add(job)
-    await session.flush()
-    await _save_job_mailboxes(session, job, mailbox_ids)
-    await session.commit()
+    try:
+        await session.flush()
+        await _save_job_mailboxes(session, job, mailbox_ids)
+        await session.commit()
+    except IntegrityError:
+        # Job-Namen müssen eindeutig sein (siehe Job.name in app/models.py) - statt mit einem
+        # rohen 500er abzubrechen, wird das Formular mit einer klaren Meldung und den bereits
+        # eingegebenen Werten erneut angezeigt.
+        await session.rollback()
+        return await _render_new_job_form_with_error(
+            request,
+            session,
+            error=f'Ein Job mit dem Namen "{name}" existiert bereits - bitte einen anderen Namen wählen.',
+            name=name,
+            tenant_id=tenant_id,
+            filter_set_id=filter_set_id,
+            target_subfolder=target_subfolder,
+            poll_interval_minutes=poll_interval_minutes,
+            mailbox_ids=mailbox_ids,
+        )
     return RedirectResponse(f"/jobs?msg=Job+{quote(name)}+angelegt", status_code=303)
 
 
@@ -217,7 +281,14 @@ async def update_job(
     if job.enabled:
         job.auto_completed = False
     await _save_job_mailboxes(session, job, mailbox_ids)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return RedirectResponse(
+            f"/jobs/{job_id}/edit?err=Ein+Job+mit+dem+Namen+%22{quote(name)}%22+existiert+bereits",
+            status_code=303,
+        )
     return RedirectResponse(f"/jobs?msg=Job+{quote(name)}+aktualisiert", status_code=303)
 
 
