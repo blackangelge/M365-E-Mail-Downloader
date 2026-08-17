@@ -23,21 +23,54 @@ _BASE_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger("app")
 
 
+def _current_uid_gid() -> str:
+    try:
+        return f"{os.getuid()}:{os.getgid()}"
+    except AttributeError:
+        return "1000:1000"  # Windows hat kein os.getuid() - Container-Standard-UID als Fallback
+
+
 async def _check_download_root_mount() -> None:
     """Bestätigt beim Start, dass DOWNLOAD_ROOT tatsächlich von einem Host-Verzeichnis gemountet
-    ist (dieselbe Prüfung wie in scripts/entrypoint.sh, hier zusätzlich DB-persistiert, damit das
-    Ergebnis in der Weboberfläche sichtbar ist statt nur in den Container-Logs)."""
+    UND für den Container-User beschreibbar ist (dieselbe Prüfung wie in scripts/entrypoint.sh,
+    hier zusätzlich DB-persistiert, damit das Ergebnis in der Weboberfläche sichtbar ist statt
+    nur in den Container-Logs).
+
+    Der Container läuft als non-root-User mit fester UID (siehe Dockerfile). Auf nativem
+    Linux-Docker (anders als z.B. Docker Desktop auf Windows/Mac) zählt für Bind-Mounts exakt der
+    Besitzer des Host-Verzeichnisses - passt der nicht, schlägt jeder Schreibversuch mit
+    "Permission denied" fehl, obwohl der Mount selbst technisch korrekt ist.
+    """
     root = get_settings().download_root
-    root.mkdir(parents=True, exist_ok=True)
-    mounted_correctly = os.stat(root).st_dev != os.stat(root.parent).st_dev
+    uid_gid = _current_uid_gid()
 
     async with async_session_factory() as session:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            probe = root / ".write_test"
+            probe.write_text("ok")
+            probe.unlink()
+        except PermissionError as exc:
+            await log_event(
+                session,
+                category=EventCategory.STARTUP,
+                level=EventLevel.ERROR,
+                message=(
+                    f"Download-Ordner-Prüfung fehlgeschlagen: {root} ist nicht beschreibbar "
+                    f"({exc}). Der Container läuft mit UID:GID {uid_gid} - auf nativem "
+                    f"Linux-Docker muss der Host-Ordner (DOWNLOAD_HOST_DIR) diesem Besitzer "
+                    f"gehören: sudo chown -R {uid_gid} <Host-Ordner>"
+                ),
+            )
+            return
+
+        mounted_correctly = os.stat(root).st_dev != os.stat(root.parent).st_dev
         if mounted_correctly:
             await log_event(
                 session,
                 category=EventCategory.STARTUP,
                 level=EventLevel.INFO,
-                message=f"Download-Ordner-Prüfung erfolgreich: {root} ist vom Host gemountet.",
+                message=f"Download-Ordner-Prüfung erfolgreich: {root} ist vom Host gemountet und beschreibbar.",
             )
         else:
             await log_event(

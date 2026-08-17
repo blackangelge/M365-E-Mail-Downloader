@@ -38,7 +38,15 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
    `POSTGRES_DB`, `DATABASE_URL`). Optional: `ADMIN_PASSWORD` setzen, um die Weboberfläche mit
    HTTP-Basic-Auth zu schützen (empfohlen, da dort Tenant-Zugangsdaten verwaltet werden).
 
-4. Container starten:
+4. Benötigte Ordner anlegen (sind bewusst in `.gitignore`, existieren bei einem frischen Checkout
+   also noch nicht - manche Docker-Setups legen fehlende Bind-Mount-Ordner nicht zuverlässig
+   selbst an):
+
+```bash
+mkdir -p data/postgres Download
+```
+
+5. Container starten:
 
 ```bash
 docker compose up -d --build
@@ -52,6 +60,23 @@ Bind-Mounts direkt im Projektordner abgelegt (nicht in einem benannten Docker-Vo
 Host-Pfad setzen (z. B. `DOWNLOAD_HOST_DIR=D:/Freigaben/PDF-Ablage`), Zielordner vorher anlegen,
 danach `docker compose up -d` (siehe Hinweis unten zu `.env`-Änderungen). `DOWNLOAD_ROOT` selbst
 (der Pfad *innerhalb* des Containers) muss dafür nicht angefasst werden.
+
+**Auf nativem Linux-Docker** (anders als Docker Desktop unter Windows/Mac, das das meist
+transparent überbrückt) läuft die App bewusst nicht als root - daher muss die UID/GID des
+Container-Prozesses zum Besitzer der gemounteten Host-Ordner passen, sonst gibt es
+"Permission denied". Statt den Host-Ordner auf eine feste Container-UID zu chownen, passt sich
+der Container beim Start selbst an: `PUID`/`PGID` in `.env` auf die UID/GID setzen, der/die
+`DOWNLOAD_HOST_DIR` auf dem Host bereits gehört (ermitteln mit `id -u` / `id -g`), z.B.:
+
+```bash
+# In .env:
+PUID=1000
+PGID=1000
+```
+
+(Standard-Pattern u.a. aus den LinuxServer.io-Images.) Der Container prüft die Schreibrechte
+beim Start selbst und bricht mit einer klaren Fehlermeldung ab, falls es nicht passt - sichtbar
+sowohl in `docker compose logs app` als auch auf der `/system`-Seite in der Weboberfläche.
 
 Bei jedem Start führt `scripts/entrypoint.sh` automatisch `alembic upgrade head` aus und wendet
 das Procrastinate-Schema nur beim allerersten Start an (die dazugehörige Sentinel-Tabelle wird

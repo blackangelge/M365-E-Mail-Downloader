@@ -24,7 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd --create-home --uid 1000 appuser
 
 COPY --from=builder /venv /venv
-ENV PATH="/venv/bin:$PATH" PYTHONUNBUFFERED=1
+# PYTHONPATH=/app: sorgt dafür, dass "import app" auch dann auflöst, wenn Skripte unter
+# scripts/ direkt als Datei ausgeführt werden (python scripts/foo.py setzt sonst nur das
+# Skript-eigene Verzeichnis auf sys.path, nicht das Arbeitsverzeichnis /app).
+ENV PATH="/venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONPATH=/app
 
 WORKDIR /app
 COPY app ./app
@@ -34,7 +37,11 @@ COPY scripts ./scripts
 
 RUN mkdir -p /data/Download && chown -R appuser:appuser /app /data
 
-USER appuser
+# Bewusst KEIN "USER appuser" hier: der Container startet als root, damit scripts/entrypoint.sh
+# die appuser-UID/GID zur Laufzeit an PUID/PGID (siehe .env) anpassen kann - notwendig, damit
+# Bind-Mounts auf nativem Linux-Docker unabhängig vom Besitzer des Host-Ordners funktionieren.
+# entrypoint.sh wechselt danach selbst per "su appuser" zu einem unprivilegierten Prozess, bevor
+# irgendein App-Code läuft.
 
 EXPOSE 4000
 
