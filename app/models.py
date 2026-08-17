@@ -55,6 +55,9 @@ class SyncStatus(str, enum.Enum):
 class EventCategory(str, enum.Enum):
     STARTUP = "startup"  # z.B. Download-Ordner-Mount-Prüfung
     GRAPH_CONNECTION = "graph_connection"  # M365-Verbindungsversuche (Sync + manueller Test)
+    DOWNLOAD_ERROR = "download_error"  # ein Anhang konnte nicht auf die Platte geschrieben werden
+    # (z.B. weil Antiviren-Software die Datei als Schadsoftware blockiert hat) - siehe
+    # app/workers/tasks.py::download_attachment
 
 
 class EventLevel(str, enum.Enum):

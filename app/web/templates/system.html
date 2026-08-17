@@ -18,6 +18,7 @@
     <option value="" {{ 'selected' if not category else '' }}>Alle</option>
     <option value="startup" {{ 'selected' if category == 'startup' else '' }}>Download-Ordner-Prüfung</option>
     <option value="graph_connection" {{ 'selected' if category == 'graph_connection' else '' }}>M365-Verbindung</option>
+    <option value="download_error" {{ 'selected' if category == 'download_error' else '' }}>Anhang-Schreibfehler</option>
   </select>
 </form>
 
@@ -29,7 +30,11 @@
       {% for row in events %}
       <tr>
         <td>{{ row.event.created_at | datetime_de }}</td>
-        <td class="muted">{{ "Ordner-Prüfung" if row.event.category.value == "startup" else "M365-Verbindung" }}</td>
+        <td class="muted">
+          {% if row.event.category.value == "startup" %}Ordner-Prüfung
+          {% elif row.event.category.value == "graph_connection" %}M365-Verbindung
+          {% else %}Anhang-Schreibfehler{% endif %}
+        </td>
         <td>
           {% if row.event.level.value == "error" %}<span class="badge err">Fehler</span>
           {% else %}<span class="badge ok">OK</span>{% endif %}

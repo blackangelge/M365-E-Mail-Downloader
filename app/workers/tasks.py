@@ -468,7 +468,33 @@ async def download_attachment(
         )
 
         if dedup_result.is_new_download:
-            write_once(target_path, attachment.content)
+            try:
+                write_once(target_path, attachment.content)
+            except OSError as exc:
+                # Häufigste Ursache: lokale Antiviren-Software hat die temporäre Datei blockiert
+                # (z.B. weil der Anhang als Schadsoftware erkannt wurde) - write_once() ist atomar
+                # (Temp-Datei + os.replace), daher landet dabei NIE eine unvollständige oder
+                # infizierte Datei am eigentlichen Zielpfad. Bisher war das nur in den rohen
+                # Container-Logs sichtbar - jetzt zusätzlich als SystemEvent auf /system, mit
+                # Betreff/Absender der auslösenden E-Mail, damit der Anhang manuell geprüft werden
+                # kann. Eigene Session fürs Logging (siehe sync_then_match für dasselbe Muster) -
+                # die aktuelle Session/Transaktion wird gleich durch das erneute Werfen verworfen.
+                async with async_session_factory() as log_session:
+                    await log_event(
+                        log_session,
+                        category=EventCategory.DOWNLOAD_ERROR,
+                        level=EventLevel.ERROR,
+                        message=(
+                            f"Anhang '{attachment.name}' aus E-Mail '{email.subject}' "
+                            f"(von {email.from_address}, Postfach {mailbox.email_address}) konnte "
+                            f"nicht gespeichert werden: {exc}. Häufigste Ursache: Antiviren-Software "
+                            f"hat die Datei beim Schreiben blockiert. Anhang manuell in der "
+                            f"Original-E-Mail prüfen."
+                        ),
+                        tenant_id=tenant.id,
+                        mailbox_id=mailbox_uuid,
+                    )
+                raise
 
         await record_sighting(
             session,

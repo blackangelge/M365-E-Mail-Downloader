@@ -70,7 +70,11 @@ async def list_system_events(
     query = select(SystemEvent, Tenant, Mailbox).outerjoin(Tenant, SystemEvent.tenant_id == Tenant.id).outerjoin(
         Mailbox, SystemEvent.mailbox_id == Mailbox.id
     )
-    if category in (EventCategory.STARTUP.value, EventCategory.GRAPH_CONNECTION.value):
+    if category in (
+        EventCategory.STARTUP.value,
+        EventCategory.GRAPH_CONNECTION.value,
+        EventCategory.DOWNLOAD_ERROR.value,
+    ):
         query = query.where(SystemEvent.category == category)
 
     query = query.order_by(SystemEvent.created_at.desc())
