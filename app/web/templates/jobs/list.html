@@ -9,7 +9,7 @@
 <div class="card">
   {% if jobs %}
   <table>
-    <thead><tr><th>Name</th><th>Tenant</th><th>Filter</th><th>Zielordner</th><th>Intervall</th><th>Status</th><th>Letzter Lauf</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Tenant</th><th>Filter</th><th>Zielordner</th><th>Intervall</th><th>Status</th><th>Fortschritt</th><th>Letzter Lauf</th><th></th></tr></thead>
     <tbody>
       {% for row in jobs %}
       <tr>
@@ -23,6 +23,10 @@
           {% elif row.job.enabled %}<span class="badge ok">aktiv</span>
           {% else %}<span class="badge idle">deaktiviert</span>{% endif %}
         </td>
+        {% set job_id = row.job.id %}
+        {% set pending = row.pending %}
+        {% set sync_running = row.sync_running %}
+        {% include "jobs/partials/progress_cell.html" %}
         <td>{{ row.job.last_run_at | datetime_de }}</td>
         <td>
           <a class="btn small secondary" href="/jobs/{{ row.job.id }}/edit">Bearbeiten</a>

@@ -33,6 +33,14 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # Anzahl gleichzeitig laufender Procrastinate-Tasks. Procrastinate-Default ist 1 (streng
+    # sequenziell) - bei großen Postfächern mit tausenden zu prüfenden Nachrichten (jede ein
+    # eigener evaluate_job_for_message-Task mit einem Graph-API-Aufruf) führt das zu absurd langen
+    # Laufzeiten, obwohl die Tasks fast nur auf Netzwerk-I/O warten und sich hervorragend
+    # parallelisieren lassen. Die Per-Tenant-Semaphore (app/graph/throttling.py) begrenzt dabei
+    # weiterhin, wie viele Graph-Aufrufe gleichzeitig gegen DENSELBEN Tenant laufen.
+    worker_concurrency: int = 10
+
     @property
     def auth_enabled(self) -> bool:
         return bool(self.admin_password)

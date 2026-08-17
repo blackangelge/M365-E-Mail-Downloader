@@ -1,0 +1,13 @@
+<td id="job-progress-{{ job_id }}"
+    {% if sync_running or pending > 0 %}
+    hx-get="/jobs/{{ job_id }}/progress" hx-trigger="every 5s" hx-swap="outerHTML"
+    {% endif %}>
+  {% if sync_running %}
+    <span class="badge warn">Sync läuft &middot;</span>
+  {% endif %}
+  {% if pending > 0 %}
+    <span class="badge warn" title="Noch nicht gegen Endungen/Keywords geprüfte Nachrichten mit Anhang">{{ pending }} ausstehend</span>
+  {% elif not sync_running %}
+    <span class="badge ok">fertig</span>
+  {% endif %}
+</td>

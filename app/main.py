@@ -91,10 +91,16 @@ async def lifespan(app: FastAPI):
     await _check_download_root_mount()
 
     async with procrastinate_app.open_async():
+        settings = get_settings()
         worker_task = asyncio.create_task(
-            procrastinate_app.run_worker_async(wait=True, listen_notify=True, install_signal_handlers=False)
+            procrastinate_app.run_worker_async(
+                wait=True,
+                listen_notify=True,
+                install_signal_handlers=False,
+                concurrency=settings.worker_concurrency,
+            )
         )
-        logger.info("Procrastinate-Worker gestartet")
+        logger.info("Procrastinate-Worker gestartet (Concurrency: %d)", settings.worker_concurrency)
         try:
             yield
         finally:

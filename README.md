@@ -141,6 +141,25 @@ New-ApplicationAccessPolicy -AppId <Client-ID> -PolicyScopeGroupId <Verteilerlis
    getroffen hat), **Logs** erlaubt die durchsuchbare Volltext-Historie aller Downloads/Duplikate.
    Auf der **Postfächer**-Seite ist während eines laufenden Syncs live sichtbar, wie viele Ordner
    und Nachrichten bereits verarbeitet wurden, sowie der Zeitpunkt des nächsten geplanten Syncs.
+   Auf der **Jobs**-Seite zeigt die Spalte "Fortschritt" live, ob gerade synchronisiert wird und
+   wie viele bereits eingelesene Nachrichten noch gegen den Filter geprüft werden müssen - so ist
+   auch bei sehr großen Postfächern (mehrere Tausend Nachrichten) jederzeit erkennbar, ob ein Lauf
+   noch arbeitet oder bereits fertig ist.
+
+## Performance bei großen Postfächern
+
+Hintergrund-Tasks (Sync, Filterprüfung, Download) laufen standardmäßig mit bis zu 10 parallel
+(`WORKER_CONCURRENCY` in `.env`, siehe `.env.example`) statt streng nacheinander - bei Postfächern
+mit vielen Tausend Nachrichten macht das den Unterschied zwischen Minuten und Stunden, da die
+meiste Zeit ohnehin auf Antworten von Microsoft Graph gewartet wird. Eine Semaphore pro Tenant
+(`app/graph/throttling.py`, max. 4 gleichzeitige Graph-Aufrufe) verhindert dabei, dass eine höhere
+Parallelität zu Throttling durch Microsoft führt.
+
+Startet ein neuer Sync-Lauf für ein Postfach, während für dasselbe Postfach bereits einer aktiv
+ist (z. B. weil der vorherige Lauf länger dauert als das Poll-Intervall, oder weil mehrere Jobs
+dasselbe Postfach beobachten), wird der neue Lauf übersprungen statt parallel mitzulaufen
+(`app/workers/locks.py`, Postgres-Advisory-Lock) - der bereits laufende Sync deckt den Durchlauf
+ohnehin ab.
 
 Heruntergeladene Dateien liegen unter `Download/<Zielordner>/<Jahr>_<Monat>_<Tag>_<Dateiname>.<ext>`
 und werden nach dem Schreiben read-only markiert – die Anwendung fasst sie danach nicht mehr an;

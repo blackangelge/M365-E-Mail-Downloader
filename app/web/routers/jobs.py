@@ -11,11 +11,21 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.models import FilterSet, Job, JobMailbox, Mailbox, Tenant
+from app.models import (
+    FilterSet,
+    Job,
+    JobMailbox,
+    JobMessageEvaluation,
+    Mailbox,
+    MailboxFolder,
+    ProcessedEmail,
+    SyncStatus,
+    Tenant,
+)
 from app.web.templating import templates
 from app.workers.storage import sanitize_path_segment
 from app.workers.tasks import run_job
@@ -35,6 +45,48 @@ async def _load_job_detail(session: AsyncSession, job: Job) -> dict:
     }
 
 
+async def _pending_counts_by_job(session: AsyncSession) -> dict[uuid.UUID, int]:
+    """Für jeden Job: Anzahl `ProcessedEmail`s mit Anhang, die im Datumsfilter des Jobs liegen,
+    aber noch KEINE `JobMessageEvaluation` haben - also noch nicht gegen Endungen/Keywords geprüft
+    wurden. Beantwortet "ist der Job fertig oder arbeitet er noch?" (siehe jobs/list.html),
+    ohne dafür Procrastinate-interne Queue-Stände auslesen zu müssen.
+
+    Der Datumsvergleich per CAST(... AS date) ist eine Näherung auf UTC-Tagesbasis (keine
+    APP_TIMEZONE-Konvertierung wie im Kalender) - für eine reine Fortschrittsanzeige ausreichend;
+    die tatsächliche, exakte Filterung passiert weiterhin in `evaluate_job_for_message`.
+    """
+    received_date = cast(ProcessedEmail.received_at, Date)
+    result = await session.execute(
+        select(Job.id, func.count(ProcessedEmail.id))
+        .select_from(Job)
+        .join(FilterSet, FilterSet.id == Job.filter_set_id)
+        .join(JobMailbox, JobMailbox.job_id == Job.id)
+        .join(ProcessedEmail, ProcessedEmail.mailbox_id == JobMailbox.mailbox_id)
+        .outerjoin(
+            JobMessageEvaluation,
+            and_(
+                JobMessageEvaluation.job_id == Job.id,
+                JobMessageEvaluation.processed_email_id == ProcessedEmail.id,
+            ),
+        )
+        .where(ProcessedEmail.has_attachments.is_(True))
+        .where(JobMessageEvaluation.id.is_(None))
+        .where(or_(FilterSet.date_from.is_(None), received_date >= FilterSet.date_from))
+        .where(or_(FilterSet.date_to.is_(None), received_date <= FilterSet.date_to))
+        .group_by(Job.id)
+    )
+    return {job_id: count for job_id, count in result.all()}
+
+
+async def _running_mailbox_ids(session: AsyncSession) -> set[uuid.UUID]:
+    """Postfächer, für die gerade mindestens ein Ordner synchronisiert wird (Status RUNNING) -
+    zeigt in der Jobliste live an, ob ein Job gerade aktiv arbeitet."""
+    result = await session.execute(
+        select(MailboxFolder.mailbox_id).where(MailboxFolder.status == SyncStatus.RUNNING).distinct()
+    )
+    return {row[0] for row in result.all()}
+
+
 @router.get("")
 async def list_jobs(request: Request, session: Annotated[AsyncSession, Depends(get_session)]):
     result = await session.execute(
@@ -43,7 +95,29 @@ async def list_jobs(request: Request, session: Annotated[AsyncSession, Depends(g
         .join(FilterSet, Job.filter_set_id == FilterSet.id)
         .order_by(Job.name)
     )
-    jobs = [{"job": j, "tenant": t, "filter_set": fs} for j, t, fs in result.all()]
+    rows = result.all()
+
+    pending_by_job = await _pending_counts_by_job(session)
+    running_mailbox_ids = await _running_mailbox_ids(session)
+
+    job_ids = [j.id for j, _, _ in rows]
+    mailbox_result = await session.execute(
+        select(JobMailbox.job_id, JobMailbox.mailbox_id).where(JobMailbox.job_id.in_(job_ids))
+    )
+    mailbox_ids_by_job: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for job_id, mailbox_id in mailbox_result.all():
+        mailbox_ids_by_job.setdefault(job_id, set()).add(mailbox_id)
+
+    jobs = [
+        {
+            "job": j,
+            "tenant": t,
+            "filter_set": fs,
+            "pending": pending_by_job.get(j.id, 0),
+            "sync_running": bool(mailbox_ids_by_job.get(j.id, set()) & running_mailbox_ids),
+        }
+        for j, t, fs in rows
+    ]
     return templates.TemplateResponse(request, "jobs/list.html", {"active_nav": "jobs", "jobs": jobs})
 
 
@@ -170,3 +244,23 @@ async def toggle_job(job_id: uuid.UUID, session: Annotated[AsyncSession, Depends
 async def run_job_now(job_id: uuid.UUID):
     await run_job.defer_async(job_id=str(job_id))
     return RedirectResponse("/jobs?msg=Job+wurde+zur+sofortigen+Ausf%C3%BChrung+eingeplant", status_code=303)
+
+
+@router.get("/{job_id}/progress")
+async def job_progress(request: Request, job_id: uuid.UUID, session: Annotated[AsyncSession, Depends(get_session)]):
+    """HTMX-Partial (per Polling nachgeladen, siehe jobs/list.html): zeigt, ob für diesen Job
+    gerade noch Nachrichten ausgewertet werden und wie viele noch ausstehen - direkte Antwort auf
+    "ist der Job fertig oder arbeitet er noch?", ohne dass man Container-Logs durchsuchen muss."""
+    pending_by_job = await _pending_counts_by_job(session)
+    running_mailbox_ids = await _running_mailbox_ids(session)
+    mailbox_result = await session.execute(select(JobMailbox.mailbox_id).where(JobMailbox.job_id == job_id))
+    job_mailbox_ids = {row[0] for row in mailbox_result.all()}
+    return templates.TemplateResponse(
+        request,
+        "jobs/partials/progress_cell.html",
+        {
+            "job_id": job_id,
+            "pending": pending_by_job.get(job_id, 0),
+            "sync_running": bool(job_mailbox_ids & running_mailbox_ids),
+        },
+    )

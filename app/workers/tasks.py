@@ -10,9 +10,11 @@ verwaiste Tasks eines toten Workers automatisch und setzt an der letzten committ
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -24,6 +26,7 @@ from app.graph.client_factory import get_graph_client
 from app.graph.errors import PermanentGraphError
 from app.graph.folders import list_inbox_and_subfolders
 from app.graph.mailbox_scanner import scan_mailbox_delta
+from app.graph.throttling import semaphore_for_tenant
 from app.models import (
     AttachmentSkip,
     EventCategory,
@@ -43,10 +46,12 @@ from app.models import (
 )
 from app.workers.dedup import check_and_record, compute_sha256, record_sighting
 from app.workers.filters import date_in_range, evaluate_attachment
+from app.workers.locks import mailbox_sync_guard
 from app.workers.procrastinate_app import app, graph_retry_strategy
 from app.workers.storage import build_target_path, write_once
 
 settings = get_settings()
+logger = logging.getLogger("app")
 
 
 @app.periodic(cron="* * * * *")
@@ -94,7 +99,17 @@ async def run_job(job_id: str) -> None:
         mailbox_ids = [row[0] for row in result.all()]
 
     for mailbox_id in mailbox_ids:
-        await sync_then_match.defer_async(job_id=job_id, mailbox_id=str(mailbox_id))
+        # queueing_lock verhindert, dass für dasselbe Postfach zwei sync_then_match-Läufe
+        # gleichzeitig in der Warteschlange stehen - kann passieren, wenn mehrere Jobs dasselbe
+        # Postfach beobachten und im selben Tick fällig werden, oder wenn ein Lauf länger dauert
+        # als das Poll-Intervall des Jobs. AlreadyEnqueued ist dabei der Normalfall (kein Fehler):
+        # der bereits wartende/laufende Sync deckt diesen Durchlauf ohnehin mit ab.
+        try:
+            await sync_then_match.configure(
+                queueing_lock=f"mailbox-sync-{mailbox_id}"
+            ).defer_async(job_id=job_id, mailbox_id=str(mailbox_id))
+        except AlreadyEnqueued:
+            continue
 
 
 @app.task(queue="jobs", retry=graph_retry_strategy)
@@ -122,85 +137,112 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
         if tenant is None or not tenant.is_active:
             return
 
-    try:
-        client = await get_graph_client(tenant)
-        discovered = await list_inbox_and_subfolders(client, mailbox.email_address)
-    except PermanentGraphError as exc:
-        async with async_session_factory() as session:
-            await log_event(
-                session,
-                category=EventCategory.GRAPH_CONNECTION,
-                level=EventLevel.ERROR,
-                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
-                tenant_id=tenant.id,
-                mailbox_id=mailbox_uuid,
+    # Advisory-Lock (siehe app/workers/locks.py): verhindert, dass zwei Läufe für DASSELBE
+    # Postfach gleichzeitig Ordner synchronisieren - kann passieren, wenn mehrere Jobs dasselbe
+    # Postfach beobachten oder ein Lauf länger dauert als das Poll-Intervall (der vom Nutzer
+    # beobachtete Fall bei großen Postfächern). Non-blocking: ein bereits laufender Sync deckt
+    # diesen Durchlauf ohnehin ab, daher wird hier übersprungen statt gewartet.
+    async with mailbox_sync_guard(mailbox_uuid) as acquired:
+        if not acquired:
+            logger.info(
+                "Sync für Postfach %s übersprungen - ein anderer Lauf ist bereits aktiv.",
+                mailbox.email_address,
             )
-        return  # kein Retry, kein Weiterlaufen zur Auswertung
-    except Exception as exc:
-        async with async_session_factory() as session:
-            await log_event(
-                session,
-                category=EventCategory.GRAPH_CONNECTION,
-                level=EventLevel.ERROR,
-                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
-                tenant_id=tenant.id,
-                mailbox_id=mailbox_uuid,
-            )
-        raise  # transient - Procrastinate versucht es per graph_retry_strategy erneut
+        else:
+            try:
+                client = await get_graph_client(tenant)
+                async with semaphore_for_tenant(str(tenant.id)):
+                    discovered = await list_inbox_and_subfolders(client, mailbox.email_address)
+            except PermanentGraphError as exc:
+                async with async_session_factory() as session:
+                    await log_event(
+                        session,
+                        category=EventCategory.GRAPH_CONNECTION,
+                        level=EventLevel.ERROR,
+                        message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                        tenant_id=tenant.id,
+                        mailbox_id=mailbox_uuid,
+                    )
+                return  # kein Retry, kein Weiterlaufen zur Auswertung
+            except Exception as exc:
+                async with async_session_factory() as session:
+                    await log_event(
+                        session,
+                        category=EventCategory.GRAPH_CONNECTION,
+                        level=EventLevel.ERROR,
+                        message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                        tenant_id=tenant.id,
+                        mailbox_id=mailbox_uuid,
+                    )
+                raise  # transient - Procrastinate versucht es per graph_retry_strategy erneut
 
-    # Ordnerliste aktuell halten: neue Ordner anlegen, bestehende (samt ihrem delta_link!)
-    # unangetastet lassen. Verschwundene/umbenannte Ordner werden bewusst nicht entfernt -
-    # verwaiste Zeilen sind harmlos und der nächste Sync-Versuch für sie schlägt einfach fehl.
-    async with async_session_factory() as session:
-        existing_result = await session.execute(select(MailboxFolder).where(MailboxFolder.mailbox_id == mailbox_uuid))
-        existing_by_graph_id = {f.graph_folder_id: f for f in existing_result.scalars().all()}
-
-        folder_ids: list[uuid.UUID] = []
-        for info in discovered:
-            existing = existing_by_graph_id.get(info.graph_folder_id)
-            if existing is not None:
-                if existing.display_path != info.display_path:
-                    existing.display_path = info.display_path  # z.B. umbenannt/verschoben
-                folder_ids.append(existing.id)
-            else:
-                new_folder = MailboxFolder(
-                    mailbox_id=mailbox_uuid,
-                    graph_folder_id=info.graph_folder_id,
-                    display_path=info.display_path,
-                    status=SyncStatus.IDLE,
+            # Ordnerliste aktuell halten: neue Ordner anlegen, bestehende (samt ihrem delta_link!)
+            # unangetastet lassen. Verschwundene/umbenannte Ordner werden bewusst nicht entfernt -
+            # verwaiste Zeilen sind harmlos und der nächste Sync-Versuch für sie schlägt einfach fehl.
+            async with async_session_factory() as session:
+                existing_result = await session.execute(
+                    select(MailboxFolder).where(MailboxFolder.mailbox_id == mailbox_uuid)
                 )
-                session.add(new_folder)
-                await session.flush()
-                folder_ids.append(new_folder.id)
+                existing_by_graph_id = {f.graph_folder_id: f for f in existing_result.scalars().all()}
 
-        await session.commit()
+                folder_ids: list[uuid.UUID] = []
+                for info in discovered:
+                    existing = existing_by_graph_id.get(info.graph_folder_id)
+                    if existing is not None:
+                        if existing.display_path != info.display_path:
+                            existing.display_path = info.display_path  # z.B. umbenannt/verschoben
+                        folder_ids.append(existing.id)
+                    else:
+                        new_folder = MailboxFolder(
+                            mailbox_id=mailbox_uuid,
+                            graph_folder_id=info.graph_folder_id,
+                            display_path=info.display_path,
+                            status=SyncStatus.IDLE,
+                        )
+                        session.add(new_folder)
+                        await session.flush()
+                        folder_ids.append(new_folder.id)
 
-    any_success = False
-    for folder_id in folder_ids:
-        try:
-            await _sync_single_folder(client, mailbox_uuid, mailbox.email_address, folder_id)
-            any_success = True
-        except Exception:  # noqa: BLE001 - ein fehlerhafter Ordner darf die anderen nicht blockieren
-            continue
+                await session.commit()
 
-    if any_success:
-        async with async_session_factory() as session:
-            await log_event(
-                session,
-                category=EventCategory.GRAPH_CONNECTION,
-                level=EventLevel.INFO,
-                message=f"Verbindung zu M365 erfolgreich (Postfach {mailbox.email_address}, {len(folder_ids)} Ordner).",
-                tenant_id=tenant.id,
-                mailbox_id=mailbox_uuid,
-            )
+            any_success = False
+            for folder_id in folder_ids:
+                try:
+                    await _sync_single_folder(
+                        client, mailbox_uuid, mailbox.email_address, folder_id, str(tenant.id)
+                    )
+                    any_success = True
+                except Exception:  # noqa: BLE001 - ein fehlerhafter Ordner darf die anderen nicht blockieren
+                    continue
+
+            if any_success:
+                async with async_session_factory() as session:
+                    await log_event(
+                        session,
+                        category=EventCategory.GRAPH_CONNECTION,
+                        level=EventLevel.INFO,
+                        message=(
+                            f"Verbindung zu M365 erfolgreich (Postfach {mailbox.email_address}, "
+                            f"{len(folder_ids)} Ordner)."
+                        ),
+                        tenant_id=tenant.id,
+                        mailbox_id=mailbox_uuid,
+                    )
 
     await match_job_against_mailbox(job_id=job_id, mailbox_id=mailbox_id)
 
 
-async def _sync_single_folder(client, mailbox_uuid: uuid.UUID, mailbox_address: str, folder_id: uuid.UUID) -> None:
+async def _sync_single_folder(
+    client, mailbox_uuid: uuid.UUID, mailbox_address: str, folder_id: uuid.UUID, tenant_id: str
+) -> None:
     """Delta-Sync für genau EINEN Ordner (siehe `sync_then_match` für die Ordner-Schleife).
     Wirft bei einem Fehler weiter, damit der Aufrufer weiß, dass dieser Ordner nicht erfolgreich
-    war - der Fehler selbst ist zu diesem Zeitpunkt bereits in MailboxFolder persistiert."""
+    war - der Fehler selbst ist zu diesem Zeitpunkt bereits in MailboxFolder persistiert.
+
+    Die Semaphore wird für die GESAMTE Paginierung eines Ordners gehalten (nicht nur pro Seite) -
+    die einzelnen Seiten hängen ohnehin sequenziell voneinander ab (jede braucht den nextLink der
+    vorherigen), paralleles Anfordern würde also nichts bringen; die Begrenzung greift stattdessen
+    zwischen verschiedenen Ordnern/Nachrichten desselben Tenants."""
     async with async_session_factory() as session:
         folder = await session.get(MailboxFolder, folder_id)
         delta_link = folder.delta_link
@@ -209,38 +251,40 @@ async def _sync_single_folder(client, mailbox_uuid: uuid.UUID, mailbox_address: 
         await session.commit()
 
     try:
-        async for page in scan_mailbox_delta(client, mailbox_address, delta_link, mail_folder=graph_folder_id):
-            async with async_session_factory() as session:
-                for msg in page.messages:
-                    stmt = (
-                        pg_insert(ProcessedEmail)
-                        .values(
-                            mailbox_id=mailbox_uuid,
-                            message_id=msg.message_id,
-                            internet_message_id=msg.internet_message_id,
-                            subject=msg.subject,
-                            from_address=msg.from_address,
-                            received_at=msg.received_at,
-                            has_attachments=msg.has_attachments,
+        async with semaphore_for_tenant(tenant_id):
+            page_iterator = scan_mailbox_delta(client, mailbox_address, delta_link, mail_folder=graph_folder_id)
+            async for page in page_iterator:
+                async with async_session_factory() as session:
+                    for msg in page.messages:
+                        stmt = (
+                            pg_insert(ProcessedEmail)
+                            .values(
+                                mailbox_id=mailbox_uuid,
+                                message_id=msg.message_id,
+                                internet_message_id=msg.internet_message_id,
+                                subject=msg.subject,
+                                from_address=msg.from_address,
+                                received_at=msg.received_at,
+                                has_attachments=msg.has_attachments,
+                            )
+                            .on_conflict_do_update(
+                                constraint="uq_processed_email",
+                                set_={
+                                    "subject": msg.subject,
+                                    "has_attachments": msg.has_attachments,
+                                },
+                            )
                         )
-                        .on_conflict_do_update(
-                            constraint="uq_processed_email",
-                            set_={
-                                "subject": msg.subject,
-                                "has_attachments": msg.has_attachments,
-                            },
-                        )
-                    )
-                    await session.execute(stmt)
+                        await session.execute(stmt)
 
-                if page.next_delta_link:
-                    folder = await session.get(MailboxFolder, folder_id)
-                    folder.delta_link = page.next_delta_link
-                    folder.last_delta_run_at = datetime.now(timezone.utc)
-                    folder.status = SyncStatus.IDLE
-                    folder.last_error = None
+                    if page.next_delta_link:
+                        folder = await session.get(MailboxFolder, folder_id)
+                        folder.delta_link = page.next_delta_link
+                        folder.last_delta_run_at = datetime.now(timezone.utc)
+                        folder.status = SyncStatus.IDLE
+                        folder.last_error = None
 
-                await session.commit()
+                    await session.commit()
 
     except PermanentGraphError as exc:
         async with async_session_factory() as session:
@@ -319,7 +363,8 @@ async def evaluate_job_for_message(job_id: str, processed_email_id: str) -> None
     skips: list[tuple[str, SkipReason, str | None]] = []
     try:
         client = await get_graph_client(tenant)
-        attachments = await list_and_download_attachments(client, mailbox.email_address, email.message_id)
+        async with semaphore_for_tenant(str(tenant.id)):
+            attachments = await list_and_download_attachments(client, mailbox.email_address, email.message_id)
         for attachment in attachments:
             evaluation = evaluate_attachment(
                 attachment_filename=attachment.name,
@@ -400,9 +445,10 @@ async def download_attachment(
         email = await session.get(ProcessedEmail, uuid.UUID(processed_email_id))
 
     client = await get_graph_client(tenant)
-    attachment = await download_single_attachment(
-        client, mailbox.email_address, graph_message_id, graph_attachment_id
-    )
+    async with semaphore_for_tenant(str(tenant.id)):
+        attachment = await download_single_attachment(
+            client, mailbox.email_address, graph_message_id, graph_attachment_id
+        )
     sha256 = compute_sha256(attachment.content)
 
     async with async_session_factory() as session:
