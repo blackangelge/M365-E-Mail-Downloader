@@ -41,6 +41,10 @@
           <form class="inline" method="post" action="/mailboxes/{{ row.mailbox.id }}/test">
             <button class="btn small secondary" type="submit">Verbindung testen</button>
           </form>
+          <form class="inline" method="post" action="/mailboxes/{{ row.mailbox.id }}/reset"
+                onsubmit="return confirm('Dedup-/Auswertungsstand für {{ row.mailbox.email_address }} wirklich zurücksetzen?\n\nJede bereits eingelesene Nachricht wird beim nächsten Lauf erneut gegen den Filter geprüft und jeder passende Anhang erneut heruntergeladen.\n\nBereits geschriebene Dateien im Zielordner werden NICHT gelöscht (write-once) - ein erneuter Download landet ggf. als Datei mit \'_1\'-Suffix daneben.');">
+            <button class="btn small secondary" type="submit" title="Löscht das Dedup-Gedächtnis, damit alles erneut heruntergeladen wird">Zurücksetzen</button>
+          </form>
           <form class="inline" method="post" action="/mailboxes/{{ row.mailbox.id }}/delete" onsubmit="return confirm('Postfach wirklich entfernen?');">
             <button class="btn small danger" type="submit">Entfernen</button>
           </form>

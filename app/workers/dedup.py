@@ -95,12 +95,16 @@ async def record_sighting(
     filename_on_email: str,
     is_new_download: bool,
 ) -> None:
-    """Idempotent per `ON CONFLICT DO NOTHING`: derselbe (attachment_file_id, processed_email_id)-
-    Sichtung kann mehrfach zu schreiben versucht werden, wenn eine `download_attachment`-Task
-    doppelt läuft (z.B. durch manuelles mehrfaches "Jetzt ausführen" oder einen Neustart mitten in
-    der Verarbeitung - Procrastinate garantiert "at least once", nicht "exactly once"). Ein
-    einfaches `session.add()` würde dabei eine `UniqueViolation` werfen statt den Task sauber
-    (erneut) erfolgreich enden zu lassen."""
+    """Idempotent per `ON CONFLICT DO NOTHING`: dieselbe (job_id, attachment_file_id,
+    processed_email_id)-Sichtung kann mehrfach zu schreiben versucht werden, wenn eine
+    `download_attachment`-Task doppelt läuft (z.B. durch manuelles mehrfaches "Jetzt ausführen"
+    oder einen Neustart mitten in der Verarbeitung - Procrastinate garantiert "at least once",
+    nicht "exactly once"). Ein einfaches `session.add()` würde dabei eine `UniqueViolation` werfen
+    statt den Task sauber (erneut) erfolgreich enden zu lassen.
+
+    job_id ist bewusst TEIL des Unique-Keys (siehe app/models.py::AttachmentSighting) - sonst
+    bekäme bei zwei Jobs auf demselben Postfach mit überlappenden Filtern nur der zuerst
+    auswertende Job je einen Sichtungs-Eintrag für einen gegebenen Anhang/eine gegebene E-Mail."""
     stmt = (
         pg_insert(AttachmentSighting)
         .values(
@@ -110,6 +114,6 @@ async def record_sighting(
             filename_on_email=filename_on_email,
             is_new_download=is_new_download,
         )
-        .on_conflict_do_nothing(constraint="uq_sighting_file_email")
+        .on_conflict_do_nothing(constraint="uq_sighting_job_file_email")
     )
     await session.execute(stmt)

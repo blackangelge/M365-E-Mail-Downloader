@@ -15,10 +15,12 @@ from app.events import log_event
 from app.graph.client_factory import test_mailbox_access
 from app.models import (
     AttachmentFile,
+    AttachmentSkip,
     EventCategory,
     EventLevel,
     Job,
     JobMailbox,
+    JobMessageEvaluation,
     Mailbox,
     MailboxFolder,
     ProcessedEmail,
@@ -166,6 +168,49 @@ async def delete_mailbox(mailbox_id: uuid.UUID, session: Annotated[AsyncSession,
         await session.delete(mailbox)
         await session.commit()
     return RedirectResponse("/mailboxes?msg=Postfach+gel%C3%B6scht", status_code=303)
+
+
+@router.post("/{mailbox_id}/reset")
+async def reset_mailbox(mailbox_id: uuid.UUID, session: Annotated[AsyncSession, Depends(get_session)]):
+    """Setzt das Dedup-/Auswertungsgedächtnis eines Postfachs komplett zurück: löscht alle
+    `AttachmentFile`-Einträge (kaskadiert per FK automatisch auf `AttachmentSighting`), alle
+    `AttachmentSkip`-Ausschluss-Aufzeichnungen und alle `JobMessageEvaluation`-Wasserzeichen für
+    die Nachrichten dieses Postfachs. Beim nächsten Lauf wird dadurch JEDE bereits eingelesene
+    Nachricht erneut gegen den aktuellen Filter geprüft und jeder passende Anhang erneut
+    heruntergeladen - so als würde das Postfach zum ersten Mal verarbeitet.
+
+    Bewusst NICHT zurückgesetzt: `ProcessedEmail` (die per Graph-Delta-Sync eingelesenen
+    Nachrichten-Metadaten) und `MailboxFolder.delta_link` - es muss dafür nichts erneut von Graph
+    geladen werden, nur die Bewertung/der Download-Status wird vergessen.
+
+    WICHTIG: bereits auf die Platte geschriebene Dateien werden NICHT gelöscht (write-once-Prinzip,
+    siehe app/workers/storage.py - die App fasst eine einmal geschriebene Datei nie wieder an).
+    Ein erneuter Download landet dann als neue Datei mit "_1"-Suffix neben der alten, falls die
+    alte noch im Zielordner liegt - bei Bedarf den Zielordner vorher manuell leeren.
+    """
+    mailbox = await session.get(Mailbox, mailbox_id)
+    if mailbox is None:
+        return RedirectResponse("/mailboxes?err=Postfach+nicht+gefunden", status_code=303)
+
+    email_ids_subq = select(ProcessedEmail.id).where(ProcessedEmail.mailbox_id == mailbox_id).scalar_subquery()
+
+    await session.execute(
+        JobMessageEvaluation.__table__.delete().where(JobMessageEvaluation.processed_email_id.in_(email_ids_subq))
+    )
+    await session.execute(
+        AttachmentSkip.__table__.delete().where(AttachmentSkip.processed_email_id.in_(email_ids_subq))
+    )
+    delete_result = await session.execute(
+        AttachmentFile.__table__.delete().where(AttachmentFile.mailbox_id == mailbox_id)
+    )
+    await session.commit()
+
+    return RedirectResponse(
+        f"/mailboxes?msg=Postfach+{quote(mailbox.email_address)}+zur%C3%BCckgesetzt+-+"
+        f"{delete_result.rowcount}+Dedup-Eintr%C3%A4ge+gel%C3%B6scht.+Bereits+geschriebene+"
+        f"Dateien+bleiben+erhalten.",
+        status_code=303,
+    )
 
 
 @router.post("/{mailbox_id}/test")

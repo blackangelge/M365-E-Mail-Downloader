@@ -134,13 +134,23 @@ New-ApplicationAccessPolicy -AppId <Client-ID> -PolicyScopeGroupId <Verteilerlis
    passender Endung) schon. Wird ein Filter nachträglich geändert, werden zuvor deswegen
    ausgeschlossene Nachrichten automatisch erneut geprüft (kein manuelles Neu-Anstoßen nötig).
 4. **Jobs** → Job anlegen: Postfächer auswählen, einen bestehenden Filter zuweisen, Zielordner
-   unter `Download/` und Prüfintervall festlegen.
+   unter `Download/` und Prüfintervall festlegen. **Ein Postfach darf immer nur zu einem Job
+   gehören** - der Dedup (siehe unten) ist postfachweit, nicht jobweit; zwei Jobs auf demselben
+   Postfach würden sich beim Herunterladen gegenseitig ins Gehege kommen (nur der zuerst
+   auswertende Job bekäme tatsächlich eine Datei in seinen Zielordner). Bereits verwendete
+   Postfächer werden im Formular ausgegraut angezeigt.
 5. Mit **„Jetzt ausführen“** einen Job sofort testen, statt auf das nächste Intervall zu warten.
 6. **Dashboard** zeigt Kennzahlen (heute/gestern/Woche), **Kalender** zeigt Downloads, Duplikate
    UND per Filter ausgeschlossene Anhänge pro Tag (jeweils mit Grund, z. B. welches Keyword
    getroffen hat), **Logs** erlaubt die durchsuchbare Volltext-Historie aller Downloads/Duplikate.
    Auf der **Postfächer**-Seite ist während eines laufenden Syncs live sichtbar, wie viele Ordner
    und Nachrichten bereits verarbeitet wurden, sowie der Zeitpunkt des nächsten geplanten Syncs.
+   Dort steht auch **„Zurücksetzen“** zur Verfügung: löscht das Dedup-Gedächtnis eines Postfachs
+   (welche Anhänge bereits heruntergeladen/geprüft wurden), sodass beim nächsten Lauf wieder ALLES
+   gegen den aktuellen Filter geprüft und heruntergeladen wird - z. B. sinnvoll nach dem Löschen
+   der Zieldateien außerhalb der App. Bereits geschriebene Dateien werden dabei NICHT gelöscht
+   (write-once-Prinzip) - ein erneuter Download landet dann als neue Datei mit „_1“-Suffix daneben,
+   falls die alte noch im Zielordner liegt.
    Auf der **Jobs**-Seite zeigt die Spalte "Fortschritt" live, ob gerade synchronisiert wird und
    wie viele bereits eingelesene Nachrichten noch gegen den Filter geprüft werden müssen - so ist
    auch bei sehr großen Postfächern (mehrere Tausend Nachrichten) jederzeit erkennbar, ob ein Lauf

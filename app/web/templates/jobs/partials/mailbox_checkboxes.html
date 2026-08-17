@@ -1,8 +1,18 @@
 {% if mailboxes %}
   {% for mb in mailboxes %}
-  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);margin:6px 0;">
-    <input type="checkbox" name="mailbox_ids" value="{{ mb.id }}" style="width:auto;" {{ 'checked' if mb.id in selected_ids else '' }}>
+  {% set is_selected = mb.id in selected_ids %}
+  {% set owner = owner_by_mailbox.get(mb.id) if owner_by_mailbox else None %}
+  {# Ein bereits für DIESEN Job ausgewähltes Postfach niemals disablen, auch wenn es (z.B. aus
+     einem alten, inzwischen unzulässigen Zustand) laut owner_by_mailbox noch einem anderen Job
+     zugeordnet ist - sonst würde ein disabled-Checkbox-Feld beim Absenden des Formulars
+     stillschweigend NICHT mitgeschickt und das Postfach beim Speichern aus diesem Job entfernt,
+     ohne dass der Nutzer das gewollt oder überhaupt bemerkt hätte. Ein echter Konflikt wird
+     stattdessen beim Speichern serverseitig erkannt und mit einer klaren Meldung abgelehnt. #}
+  <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--text);margin:6px 0;{{ 'opacity:0.5;' if owner and not is_selected else '' }}">
+    <input type="checkbox" name="mailbox_ids" value="{{ mb.id }}" style="width:auto;"
+           {{ 'checked' if is_selected else '' }} {{ 'disabled' if (owner and not is_selected) else '' }}>
     {{ mb.email_address }}
+    {% if owner %}<span class="muted" style="font-size:12px;">(bereits bei Job "{{ owner }}" - ein Postfach darf nur einem Job gehören)</span>{% endif %}
   </label>
   {% endfor %}
 {% else %}

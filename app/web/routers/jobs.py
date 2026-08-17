@@ -79,6 +79,52 @@ async def _pending_counts_by_job(session: AsyncSession) -> dict[uuid.UUID, int]:
     return {job_id: count for job_id, count in result.all()}
 
 
+async def _mailbox_owner_map(
+    session: AsyncSession, *, exclude_job_id: uuid.UUID | None = None
+) -> dict[uuid.UUID, str]:
+    """{mailbox_id: job_name} für alle Postfächer, die bereits einem Job zugeordnet sind - ein
+    Postfach darf zu höchstens einem Job gehören (siehe JobMailbox.mailbox_id unique=True in
+    app/models.py: zwei Jobs auf demselben Postfach mit überlappenden Filtern führen wegen des
+    postfachweiten Content-Dedups sonst dazu, dass der zweite Job nie eine eigene Kopie in seinen
+    Zielordner bekommt). `exclude_job_id` blendet die eigenen Zuordnungen aus - beim Bearbeiten
+    eines Jobs sind dessen eigene Postfächer kein Konflikt mit sich selbst."""
+    query = select(JobMailbox.mailbox_id, Job.name).join(Job, Job.id == JobMailbox.job_id)
+    if exclude_job_id is not None:
+        query = query.where(JobMailbox.job_id != exclude_job_id)
+    result = await session.execute(query)
+    return {mailbox_id: job_name for mailbox_id, job_name in result.all()}
+
+
+async def _mailbox_conflict_error(
+    session: AsyncSession, mailbox_ids: list[uuid.UUID], *, exclude_job_id: uuid.UUID | None = None
+) -> str | None:
+    """Liefert eine Fehlermeldung, falls eines der ausgewählten Postfächer bereits einem anderen
+    Job gehört, sonst None."""
+    owner_map = await _mailbox_owner_map(session, exclude_job_id=exclude_job_id)
+    conflict_ids = [mid for mid in mailbox_ids if mid in owner_map]
+    if not conflict_ids:
+        return None
+    mailboxes_result = await session.execute(select(Mailbox).where(Mailbox.id.in_(conflict_ids)))
+    mailbox_by_id = {m.id: m for m in mailboxes_result.scalars().all()}
+    details = ", ".join(
+        f'{mailbox_by_id[mid].email_address} (bereits bei Job "{owner_map[mid]}")'
+        for mid in conflict_ids
+        if mid in mailbox_by_id
+    )
+    return f"Ein Postfach darf nur zu einem Job gehören - Konflikt bei: {details}."
+
+
+def _friendly_integrity_error(exc: IntegrityError, *, name: str) -> str:
+    """Übersetzt eine rohe Postgres-UniqueViolation in eine für den Nutzer verständliche Meldung -
+    als Sicherheitsnetz für Races, die die App-seitige Vorab-Prüfung (siehe
+    `_mailbox_conflict_error`) theoretisch durchrutschen lässt (z.B. zwei fast gleichzeitige
+    Speicherversuche)."""
+    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint == "uq_job_mailbox_mailbox":
+        return "Mindestens eines der ausgewählten Postfächer gehört bereits zu einem anderen Job - ein Postfach darf nur einem Job zugeordnet sein."
+    return f'Ein Job mit dem Namen "{name}" existiert bereits - bitte einen anderen Namen wählen.'
+
+
 async def _running_mailbox_ids(session: AsyncSession) -> set[uuid.UUID]:
     """Postfächer, für die gerade mindestens ein Ordner synchronisiert wird (Status RUNNING) -
     zeigt in der Jobliste live an, ob ein Job gerade aktiv arbeitet."""
@@ -137,6 +183,7 @@ async def new_job_form(request: Request, session: Annotated[AsyncSession, Depend
             "tenants": tenants_result.scalars().all(),
             "filter_sets": filter_sets_result.scalars().all(),
             "mailboxes": [],
+            "owner_by_mailbox": {},
         },
     )
 
@@ -159,6 +206,7 @@ async def _render_new_job_form_with_error(
     tenants_result = await session.execute(select(Tenant).where(Tenant.is_active.is_(True)).order_by(Tenant.name))
     filter_sets_result = await session.execute(select(FilterSet).order_by(FilterSet.name))
     mailboxes_result = await session.execute(select(Mailbox).where(Mailbox.tenant_id == tenant_id))
+    owner_by_mailbox = await _mailbox_owner_map(session)
     return templates.TemplateResponse(
         request,
         "jobs/form.html",
@@ -177,6 +225,7 @@ async def _render_new_job_form_with_error(
             "tenants": tenants_result.scalars().all(),
             "filter_sets": filter_sets_result.scalars().all(),
             "mailboxes": mailboxes_result.scalars().all(),
+            "owner_by_mailbox": owner_by_mailbox,
         },
         status_code=409,
     )
@@ -189,6 +238,7 @@ async def edit_job_form(request: Request, job_id: uuid.UUID, session: Annotated[
     tenants_result = await session.execute(select(Tenant).order_by(Tenant.name))
     filter_sets_result = await session.execute(select(FilterSet).order_by(FilterSet.name))
     mailboxes_result = await session.execute(select(Mailbox).where(Mailbox.tenant_id == job.tenant_id))
+    owner_by_mailbox = await _mailbox_owner_map(session, exclude_job_id=job_id)
     return templates.TemplateResponse(
         request,
         "jobs/form.html",
@@ -200,6 +250,7 @@ async def edit_job_form(request: Request, job_id: uuid.UUID, session: Annotated[
             "tenants": tenants_result.scalars().all(),
             "filter_sets": filter_sets_result.scalars().all(),
             "mailboxes": mailboxes_result.scalars().all(),
+            "owner_by_mailbox": owner_by_mailbox,
         },
     )
 
@@ -208,8 +259,11 @@ async def edit_job_form(request: Request, job_id: uuid.UUID, session: Annotated[
 async def mailboxes_for_tenant(request: Request, tenant_id: uuid.UUID, session: Annotated[AsyncSession, Depends(get_session)]):
     """HTMX-Partial: aktualisiert die Postfach-Checkboxen, wenn im Formular der Tenant gewechselt wird."""
     result = await session.execute(select(Mailbox).where(Mailbox.tenant_id == tenant_id).order_by(Mailbox.email_address))
+    owner_by_mailbox = await _mailbox_owner_map(session)
     return templates.TemplateResponse(
-        request, "jobs/partials/mailbox_checkboxes.html", {"mailboxes": result.scalars().all(), "selected_ids": set()}
+        request,
+        "jobs/partials/mailbox_checkboxes.html",
+        {"mailboxes": result.scalars().all(), "selected_ids": set(), "owner_by_mailbox": owner_by_mailbox},
     )
 
 
@@ -230,6 +284,23 @@ async def create_job(
     poll_interval_minutes: Annotated[int, Form()] = 15,
     mailbox_ids: Annotated[list[uuid.UUID], Form()] = [],
 ):
+    # Vorab-Prüfung (freundliche Meldung statt roher 500er): ein Postfach darf nur zu einem Job
+    # gehören (siehe _mailbox_owner_map). Die DB-Constraint uq_job_mailbox_mailbox greift zwar
+    # ebenfalls, aber nur als Sicherheitsnetz für Races.
+    conflict_error = await _mailbox_conflict_error(session, mailbox_ids)
+    if conflict_error:
+        return await _render_new_job_form_with_error(
+            request,
+            session,
+            error=conflict_error,
+            name=name,
+            tenant_id=tenant_id,
+            filter_set_id=filter_set_id,
+            target_subfolder=target_subfolder,
+            poll_interval_minutes=poll_interval_minutes,
+            mailbox_ids=mailbox_ids,
+        )
+
     job = Job(
         name=name,
         tenant_id=tenant_id,
@@ -242,15 +313,14 @@ async def create_job(
         await session.flush()
         await _save_job_mailboxes(session, job, mailbox_ids)
         await session.commit()
-    except IntegrityError:
-        # Job-Namen müssen eindeutig sein (siehe Job.name in app/models.py) - statt mit einem
-        # rohen 500er abzubrechen, wird das Formular mit einer klaren Meldung und den bereits
-        # eingegebenen Werten erneut angezeigt.
+    except IntegrityError as exc:
+        # Statt mit einem rohen 500er abzubrechen, wird das Formular mit einer klaren Meldung und
+        # den bereits eingegebenen Werten erneut angezeigt (Job-Name ODER Postfach-Konflikt).
         await session.rollback()
         return await _render_new_job_form_with_error(
             request,
             session,
-            error=f'Ein Job mit dem Namen "{name}" existiert bereits - bitte einen anderen Namen wählen.',
+            error=_friendly_integrity_error(exc, name=name),
             name=name,
             tenant_id=tenant_id,
             filter_set_id=filter_set_id,
@@ -272,6 +342,10 @@ async def update_job(
     mailbox_ids: Annotated[list[uuid.UUID], Form()] = [],
     enabled: Annotated[str, Form()] = "",
 ):
+    conflict_error = await _mailbox_conflict_error(session, mailbox_ids, exclude_job_id=job_id)
+    if conflict_error:
+        return RedirectResponse(f"/jobs/{job_id}/edit?err={quote(conflict_error)}", status_code=303)
+
     job = await session.get(Job, job_id)
     job.name = name
     job.filter_set_id = filter_set_id
@@ -283,10 +357,10 @@ async def update_job(
     await _save_job_mailboxes(session, job, mailbox_ids)
     try:
         await session.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await session.rollback()
         return RedirectResponse(
-            f"/jobs/{job_id}/edit?err=Ein+Job+mit+dem+Namen+%22{quote(name)}%22+existiert+bereits",
+            f"/jobs/{job_id}/edit?err={quote(_friendly_integrity_error(exc, name=name))}",
             status_code=303,
         )
     return RedirectResponse(f"/jobs?msg=Job+{quote(name)}+aktualisiert", status_code=303)

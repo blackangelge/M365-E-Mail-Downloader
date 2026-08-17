@@ -172,10 +172,19 @@ class Job(Base):
 
 
 class JobMailbox(Base):
+    """Ein Postfach darf zu höchstens EINEM Job gehören (siehe unique=True auf mailbox_id) - sonst
+    würden zwei Jobs mit überlappenden Filtern denselben Anhang matchen, aber das
+    postfachweite Content-Dedup (siehe app/workers/dedup.py) sorgt dafür, dass nur der zuerst
+    auswertende Job tatsächlich eine Datei in seinen eigenen Zielordner schreibt - der zweite Job
+    bekäme nie eine eigene Kopie, was beim Anlegen mehrerer Jobs pro Postfach zu genau der
+    Verwirrung führt, die diese Beschränkung verhindert."""
+
     __tablename__ = "job_mailboxes"
 
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True)
-    mailbox_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("mailboxes.id", ondelete="CASCADE"), primary_key=True)
+    mailbox_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("mailboxes.id", ondelete="CASCADE"), primary_key=True, unique=True
+    )
 
     job: Mapped[Job] = relationship(back_populates="mailbox_links")
     mailbox: Mapped[Mailbox] = relationship()
@@ -291,7 +300,15 @@ class AttachmentSighting(Base):
 
     __tablename__ = "attachment_sightings"
     __table_args__ = (
-        UniqueConstraint("attachment_file_id", "processed_email_id", name="uq_sighting_file_email"),
+        # WICHTIG: job_id ist Teil des Unique-Keys, NICHT nur (attachment_file_id,
+        # processed_email_id) - sonst kann bei zwei Jobs auf demselben Postfach mit
+        # überlappenden Filtern nur der ZUERST auswertende Job jemals einen Sichtungs-Eintrag
+        # bekommen; der zweite Job würde beim "ON CONFLICT DO NOTHING" (siehe
+        # app/workers/dedup.py::record_sighting) stillschweigend leer ausgehen, obwohl er den
+        # Anhang ebenfalls korrekt erkannt hat (nur eben nicht erneut herunterladen musste).
+        UniqueConstraint(
+            "job_id", "attachment_file_id", "processed_email_id", name="uq_sighting_job_file_email"
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
