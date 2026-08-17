@@ -123,18 +123,24 @@ New-ApplicationAccessPolicy -AppId <Client-ID> -PolicyScopeGroupId <Verteilerlis
 
 1. **Tenants** → neuen Tenant mit Azure Tenant ID, Client ID und Client-Secret oder Zertifikat anlegen.
 2. **Postfächer** → Postfach-Adresse(n) für diesen Tenant hinzufügen, per "Verbindung testen" prüfen.
+   Jedes Postfach wird **inklusive aller Unterordner des Posteingangs** (beliebig verschachtelt,
+   z. B. durch Regeln oder manuelle Sortierung entstanden) durchsucht, nicht nur der Posteingang
+   selbst - die Ordnerstruktur wird bei jedem Sync-Lauf automatisch neu ermittelt.
 3. **Filter** → einen wiederverwendbaren Filter anlegen: Datumsbereich (optional), Dateiendungen
-   (z. B. `.pdf`), Ausschluss-Keywords (z. B. `Avis, Zahlungserinnerung`). Filter werden hier
-   zentral gepflegt und können von mehreren Jobs gemeinsam genutzt werden - **die Keywords sind
-   ein Ausschluss-Filter**: Anhänge, deren Betreff oder Dateiname eines der Wörter enthält, werden
-   NICHT heruntergeladen; alle anderen (mit passender Endung) schon.
+   (z. B. `.pdf`), Ausschluss-Keywords (z. B. `Avis, Zahlungserinnerung` - kommagetrennt oder je
+   eine Zeile, beliebig lang). Filter werden hier zentral gepflegt und können von mehreren Jobs
+   gemeinsam genutzt werden - **die Keywords sind ein Ausschluss-Filter**: Anhänge, deren Betreff
+   oder Dateiname eines der Wörter enthält, werden NICHT heruntergeladen; alle anderen (mit
+   passender Endung) schon. Wird ein Filter nachträglich geändert, werden zuvor deswegen
+   ausgeschlossene Nachrichten automatisch erneut geprüft (kein manuelles Neu-Anstoßen nötig).
 4. **Jobs** → Job anlegen: Postfächer auswählen, einen bestehenden Filter zuweisen, Zielordner
    unter `Download/` und Prüfintervall festlegen.
 5. Mit **„Jetzt ausführen“** einen Job sofort testen, statt auf das nächste Intervall zu warten.
-6. **Dashboard** zeigt Kennzahlen (heute/gestern/Woche), **Kalender** zeigt Downloads pro Tag,
-   **Logs** erlaubt die durchsuchbare Volltext-Historie aller Sichtungen (inkl. übersprungener Duplikate).
-   Auf der **Postfächer**-Seite ist während eines laufenden Syncs live sichtbar, wie viele
-   Nachrichten bereits eingelesen wurden, sowie der Zeitpunkt des nächsten geplanten Syncs.
+6. **Dashboard** zeigt Kennzahlen (heute/gestern/Woche), **Kalender** zeigt Downloads, Duplikate
+   UND per Filter ausgeschlossene Anhänge pro Tag (jeweils mit Grund, z. B. welches Keyword
+   getroffen hat), **Logs** erlaubt die durchsuchbare Volltext-Historie aller Downloads/Duplikate.
+   Auf der **Postfächer**-Seite ist während eines laufenden Syncs live sichtbar, wie viele Ordner
+   und Nachrichten bereits verarbeitet wurden, sowie der Zeitpunkt des nächsten geplanten Syncs.
 
 Heruntergeladene Dateien liegen unter `Download/<Zielordner>/<Jahr>_<Monat>_<Tag>_<Dateiname>.<ext>`
 und werden nach dem Schreiben read-only markiert – die Anwendung fasst sie danach nicht mehr an;

@@ -1,16 +1,16 @@
 <td id="sync-status-{{ mailbox_id }}"
-    {% if state and state.status.value == "running" %}
+    {% if summary and summary.status.value == "running" %}
     hx-get="/mailboxes/{{ mailbox_id }}/status" hx-trigger="every 3s" hx-swap="outerHTML"
     {% endif %}>
-  {% if not state %}
+  {% if not summary %}
     <span class="badge idle">noch nie synchronisiert</span>
-  {% elif state.status.value == "error" %}
-    <span class="badge err" title="{{ state.last_error }}">Fehler</span>
+  {% elif summary.status.value == "error" %}
+    <span class="badge err" title="{{ summary.last_error }}">Fehler ({{ summary.errors }}/{{ summary.total }} Ordner)</span>
     <div class="hint">{{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} · {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</div>
-  {% elif state.status.value == "running" %}
-    <span class="badge warn">läuft &middot; {{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} &middot; {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</span>
+  {% elif summary.status.value == "running" %}
+    <span class="badge warn">läuft &middot; {{ summary.total }} Ordner &middot; {{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} &middot; {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</span>
   {% else %}
-    <span class="badge ok" title="Wird auch durch manuelles 'Jetzt ausführen' aktualisiert, nicht nur durch den Zeitplan.">idle &middot; letzter Sync {{ state.last_delta_run_at | datetime_de }}</span>
+    <span class="badge ok" title="Wird auch durch manuelles 'Jetzt ausführen' aktualisiert, nicht nur durch den Zeitplan.">idle &middot; {{ summary.total }} Ordner &middot; letzter Sync {{ summary.last_delta_run_at | datetime_de }}</span>
     <div class="hint">{{ synced_count }} Nachrichten eingelesen{% if downloaded_count %} · {{ downloaded_count }} Anhänge heruntergeladen{% endif %}</div>
   {% endif %}
   <div class="hint" title="Regulärer Zeitplan des Jobs - unabhängig von manuellen Läufen.">

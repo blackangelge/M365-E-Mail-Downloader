@@ -25,6 +25,7 @@
         <div class="day-num">{{ day.date.day }}</div>
         {% if day.count > 0 %}<div class="day-count">{{ day.count }}</div>{% endif %}
         {% if day.duplicate_count > 0 %}<div class="hint" style="margin-top:2px;">+{{ day.duplicate_count }} Duplikat{{ "e" if day.duplicate_count != 1 else "" }}</div>{% endif %}
+        {% if day.excluded_count > 0 %}<div class="hint" style="margin-top:2px;color:var(--warn);">{{ day.excluded_count }} ausgeschlossen</div>{% endif %}
       </div>
       {% else %}
       <div class="calendar-cell empty"></div>
@@ -34,5 +35,5 @@
 </div>
 
 <h2>Details</h2>
-<div id="day-detail" class="card"><p class="muted">Auf einen Tag mit Downloads klicken, um Details zu sehen.</p></div>
+<div id="day-detail" class="card"><p class="muted">Auf einen Tag klicken, um Downloads, Duplikate und ausgeschlossene Anhänge im Detail zu sehen.</p></div>
 {% endblock %}

@@ -20,8 +20,9 @@ from app.models import (
     Job,
     JobMailbox,
     Mailbox,
-    MailboxSyncState,
+    MailboxFolder,
     ProcessedEmail,
+    SyncStatus,
     Tenant,
 )
 from app.web.templating import templates
@@ -44,6 +45,37 @@ async def _downloaded_counts(session: AsyncSession) -> dict[uuid.UUID, int]:
         select(AttachmentFile.mailbox_id, func.count(AttachmentFile.id)).group_by(AttachmentFile.mailbox_id)
     )
     return dict(result.all())
+
+
+async def _folder_summary(session: AsyncSession, mailbox_id: uuid.UUID | None = None) -> dict[uuid.UUID, dict]:
+    """Aggregiert den Sync-Status über ALLE Ordner (Posteingang + Unterordner) eines Postfachs:
+    'Fehler' wenn mindestens ein Ordner einen Fehler hat, 'läuft' wenn mindestens einer noch
+    synchronisiert, sonst 'idle'. Ein Postfach hat keinen einzelnen Sync-Status mehr, seit auch
+    Unterordner verarbeitet werden (siehe app/workers/tasks.py::sync_then_match)."""
+    query = select(MailboxFolder)
+    if mailbox_id is not None:
+        query = query.where(MailboxFolder.mailbox_id == mailbox_id)
+    result = await session.execute(query)
+
+    summary: dict[uuid.UUID, dict] = {}
+    for folder in result.scalars().all():
+        agg = summary.setdefault(
+            folder.mailbox_id,
+            {"status": SyncStatus.IDLE, "last_delta_run_at": None, "last_error": None, "total": 0, "errors": 0},
+        )
+        agg["total"] += 1
+        if folder.status == SyncStatus.ERROR:
+            agg["errors"] += 1
+            if agg["status"] != SyncStatus.ERROR:
+                agg["status"] = SyncStatus.ERROR
+                agg["last_error"] = f"{folder.display_path}: {folder.last_error}"
+        elif folder.status == SyncStatus.RUNNING and agg["status"] != SyncStatus.ERROR:
+            agg["status"] = SyncStatus.RUNNING
+        if folder.last_delta_run_at and (
+            agg["last_delta_run_at"] is None or folder.last_delta_run_at > agg["last_delta_run_at"]
+        ):
+            agg["last_delta_run_at"] = folder.last_delta_run_at
+    return summary
 
 
 async def _next_sync_at(session: AsyncSession, mailbox_id: uuid.UUID | None = None):
@@ -72,9 +104,6 @@ async def list_mailboxes(request: Request, session: Annotated[AsyncSession, Depe
     )
     mailboxes = [{"mailbox": m, "tenant": t} for m, t in result.all()]
 
-    sync_states_result = await session.execute(select(MailboxSyncState))
-    sync_by_mailbox = {s.mailbox_id: s for s in sync_states_result.scalars().all()}
-
     tenants_result = await session.execute(select(Tenant).order_by(Tenant.name))
 
     return templates.TemplateResponse(
@@ -83,7 +112,7 @@ async def list_mailboxes(request: Request, session: Annotated[AsyncSession, Depe
         {
             "active_nav": "mailboxes",
             "mailboxes": mailboxes,
-            "sync_by_mailbox": sync_by_mailbox,
+            "folder_summary": await _folder_summary(session),
             "synced_counts": await _synced_message_counts(session),
             "downloaded_counts": await _downloaded_counts(session),
             "next_sync_ats": await _next_sync_at(session),
@@ -97,7 +126,7 @@ async def mailbox_status(request: Request, mailbox_id: uuid.UUID, session: Annot
     """HTMX-Partial: wird alle paar Sekunden nachgeladen, solange ein Postfach synchronisiert,
     damit sichtbar ist, dass (und wie weit) der Sync tatsächlich vorankommt - nicht nur, dass er
     'läuft'."""
-    state = await session.get(MailboxSyncState, mailbox_id)
+    summary = (await _folder_summary(session, mailbox_id)).get(mailbox_id)
     synced_result = await session.execute(
         select(func.count(ProcessedEmail.id)).where(ProcessedEmail.mailbox_id == mailbox_id)
     )
@@ -109,7 +138,7 @@ async def mailbox_status(request: Request, mailbox_id: uuid.UUID, session: Annot
         "mailboxes/partials/status_cell.html",
         {
             "mailbox_id": mailbox_id,
-            "state": state,
+            "summary": summary,
             "synced_count": synced_result.scalar_one(),
             "downloaded_count": downloaded_result.scalar_one(),
             "next_sync_at": await _next_sync_at(session, mailbox_id),

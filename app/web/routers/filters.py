@@ -14,9 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_session
-from app.models import FilterSet, FilterSetExtension, FilterSetKeyword, Job
+from app.models import FilterSet, FilterSetExtension, FilterSetKeyword, Job, JobMessageEvaluation
 from app.schemas import parse_date_de, parse_extensions, parse_keywords
 from app.web.templating import templates
+from app.workers.tasks import run_job
 
 router = APIRouter(prefix="/filters")
 
@@ -112,8 +113,39 @@ async def update_filter_set(
     filter_set.date_from = parse_date_de(date_from)
     filter_set.date_to = parse_date_de(date_to)
     await _save_filter_set_children(session, filter_set, extensions, keywords)
+
+    # Nachrichten, die beim letzten Lauf ausgewertet, aber NICHT heruntergeladen wurden (Endung
+    # oder Ausschluss-Keyword hat nicht gepasst), für die betroffenen Jobs erneut zur Auswertung
+    # freigeben - sonst würden sie durch job_message_evaluations (Idempotenz-Schutz) für immer
+    # blockiert bleiben, selbst wenn sie dem geänderten Filter jetzt entsprechen würden. Bereits
+    # erfolgreich heruntergeladene Nachrichten bleiben unangetastet (kein erneuter Download).
+    jobs_result = await session.execute(select(Job).where(Job.filter_set_id == filter_set_id))
+    affected_jobs = jobs_result.scalars().all()
+    job_ids = [job.id for job in affected_jobs]
+
+    reevaluated_count = 0
+    if job_ids:
+        delete_result = await session.execute(
+            JobMessageEvaluation.__table__.delete()
+            .where(JobMessageEvaluation.job_id.in_(job_ids))
+            .where(JobMessageEvaluation.matched.is_(False))
+        )
+        reevaluated_count = delete_result.rowcount
+
     await session.commit()
-    return RedirectResponse(f"/filters?msg=Filter+{quote(name)}+aktualisiert", status_code=303)
+
+    # Betroffene, aktive Jobs gleich anstoßen, statt auf den nächsten Zeitplan-Tick zu warten.
+    for job in affected_jobs:
+        if job.enabled:
+            await run_job.defer_async(job_id=str(job.id))
+
+    msg = f"Filter+{quote(name)}+aktualisiert"
+    if reevaluated_count:
+        msg += (
+            f"+-+{reevaluated_count}+zuvor+ausgeschlossene+Nachricht(en)+werden+jetzt+erneut+"
+            f"gegen+den+neuen+Filter+gepr%C3%BCft"
+        )
+    return RedirectResponse(f"/filters?msg={msg}", status_code=303)
 
 
 @router.post("/{filter_set_id}/delete")

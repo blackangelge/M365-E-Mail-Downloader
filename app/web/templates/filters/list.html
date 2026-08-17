@@ -19,7 +19,14 @@
           {% else %}unbegrenzt{% endif %}
         </td>
         <td class="muted">{{ fs.extensions | map(attribute='extension') | join(', ') }}</td>
-        <td class="muted">{{ fs.keywords | map(attribute='keyword_display') | join(', ') or '-' }}</td>
+        <td class="muted">
+          {% if fs.keywords %}
+          <span title="{{ fs.keywords | map(attribute='keyword_display') | join(', ') }}">
+            {{ fs.keywords | length }} Keyword{{ "s" if fs.keywords | length != 1 else "" }}:
+            {{ fs.keywords[:6] | map(attribute='keyword_display') | join(', ') }}{{ ", ..." if fs.keywords | length > 6 else "" }}
+          </span>
+          {% else %}-{% endif %}
+        </td>
         <td>{{ usage_counts.get(fs.id, 0) }} Job(s)</td>
         <td>
           <a class="btn small secondary" href="/filters/{{ fs.id }}/edit">Bearbeiten</a>

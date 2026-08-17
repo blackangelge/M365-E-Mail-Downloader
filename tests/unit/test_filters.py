@@ -3,6 +3,7 @@ from datetime import date, datetime
 from app.workers.filters import (
     attachment_matches,
     date_in_range,
+    evaluate_attachment,
     extension_matches,
     keyword_matches,
     normalize_extension,
@@ -106,3 +107,51 @@ def test_attachment_matches_no_keywords_means_extension_only():
         allowed_extensions={".pdf"},
         keywords=[],
     ) is True
+
+
+def test_evaluate_attachment_reports_extension_reason():
+    result = evaluate_attachment(
+        attachment_filename="beleg.docx",
+        email_subject="irrelevant",
+        allowed_extensions={".pdf"},
+        keywords=["avis"],
+    )
+    assert result.matches is False
+    assert result.reason == "extension"
+    assert result.matched_keyword is None
+
+
+def test_evaluate_attachment_reports_matched_keyword_from_filename():
+    result = evaluate_attachment(
+        attachment_filename="Avis_2026.pdf",
+        email_subject="Guten Tag",
+        allowed_extensions={".pdf"},
+        keywords=["Avis", "Mahnung"],
+    )
+    assert result.matches is False
+    assert result.reason == "keyword"
+    assert result.matched_keyword == "Avis"
+
+
+def test_evaluate_attachment_reports_matched_keyword_from_subject():
+    result = evaluate_attachment(
+        attachment_filename="rechnung_001.pdf",
+        email_subject="Ihre Zahlungserinnerung",
+        allowed_extensions={".pdf"},
+        keywords=["Zahlungserinnerung"],
+    )
+    assert result.matches is False
+    assert result.reason == "keyword"
+    assert result.matched_keyword == "Zahlungserinnerung"
+
+
+def test_evaluate_attachment_matches_has_no_reason():
+    result = evaluate_attachment(
+        attachment_filename="rechnung_001.pdf",
+        email_subject="Ihre Bestellung",
+        allowed_extensions={".pdf"},
+        keywords=["avis"],
+    )
+    assert result.matches is True
+    assert result.reason is None
+    assert result.matched_keyword is None

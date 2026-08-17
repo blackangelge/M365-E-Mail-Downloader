@@ -62,6 +62,11 @@ class EventLevel(str, enum.Enum):
     ERROR = "error"
 
 
+class SkipReason(str, enum.Enum):
+    EXTENSION = "extension"  # Dateiendung nicht in den erlaubten Endungen des Filters
+    KEYWORD = "keyword"  # Ausschluss-Keyword im Betreff oder Dateinamen gefunden
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
 
@@ -101,17 +106,22 @@ class Mailbox(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     tenant: Mapped[Tenant] = relationship(back_populates="mailboxes")
-    sync_state: Mapped["MailboxSyncState | None"] = relationship(
-        back_populates="mailbox", cascade="all, delete-orphan", uselist=False
-    )
+    folders: Mapped[list["MailboxFolder"]] = relationship(back_populates="mailbox", cascade="all, delete-orphan")
 
 
-class MailboxSyncState(Base):
-    __tablename__ = "mailbox_sync_state"
+class MailboxFolder(Base):
+    """Sync-Status pro Postfach UND Ordner (Posteingang + all seine Unterordner, beliebig
+    verschachtelt) - Anhänge können in per Regel oder manuell sortierten Unterordnern des
+    Posteingangs landen, deshalb reicht ein Sync-Status pro Postfach allein nicht aus. Jeder
+    Ordner hat sein eigenes Delta-Token, da Graph-Delta-Queries pro Ordner laufen."""
 
-    mailbox_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("mailboxes.id", ondelete="CASCADE"), primary_key=True
-    )
+    __tablename__ = "mailbox_folders"
+    __table_args__ = (UniqueConstraint("mailbox_id", "graph_folder_id", name="uq_mailbox_folder"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    mailbox_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("mailboxes.id", ondelete="CASCADE"), nullable=False)
+    graph_folder_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     delta_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_delta_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[SyncStatus] = mapped_column(
@@ -122,7 +132,7 @@ class MailboxSyncState(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    mailbox: Mapped[Mailbox] = relationship(back_populates="sync_state")
+    mailbox: Mapped[Mailbox] = relationship(back_populates="folders")
 
 
 class Job(Base):
@@ -295,6 +305,29 @@ class AttachmentSighting(Base):
     filename_on_email: Mapped[str] = mapped_column(String(1024), nullable=False)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     is_new_download: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class AttachmentSkip(Base):
+    """Ein Anhang, der wegen des Ausschluss-Filters (Endung oder Keyword) NICHT heruntergeladen
+    wurde. Anders als AttachmentSighting gibt es hier keinen AttachmentFile-Bezug, da der Inhalt
+    nie heruntergeladen und somit auch kein SHA-256-Hash gebildet wurde - übersprungene Anhänge
+    werden rein anhand von E-Mail/Job identifiziert. Macht übersprungene E-Mails im Kalender
+    sichtbar (siehe app/web/routers/calendar.py), statt spurlos zu verschwinden."""
+
+    __tablename__ = "attachment_skips"
+    __table_args__ = (
+        UniqueConstraint("job_id", "processed_email_id", "filename_on_email", name="uq_attachment_skip"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    processed_email_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("processed_emails.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    filename_on_email: Mapped[str] = mapped_column(String(1024), nullable=False)
+    reason: Mapped[SkipReason] = mapped_column(_pg_enum(SkipReason, "skip_reason"), nullable=False)
+    matched_keyword: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    skipped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SystemEvent(Base):

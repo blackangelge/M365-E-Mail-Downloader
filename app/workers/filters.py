@@ -5,6 +5,7 @@ getestet werden können (siehe tests/unit/test_filters.py).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 
 
@@ -52,13 +53,24 @@ def date_in_range(received_at: datetime | date | None, date_from: date | None, d
     return True
 
 
-def attachment_matches(
+@dataclass(slots=True)
+class AttachmentEvaluation:
+    """Ergebnis der Filterprüfung eines Anhangs - anders als ein reines bool hält das auch fest,
+    WARUM ein Anhang ausgeschlossen wurde (für die Anzeige übersprungener E-Mails im Kalender,
+    siehe app/workers/tasks.py und app/models.py::AttachmentSkip)."""
+
+    matches: bool
+    reason: str | None = None  # "extension" | "keyword" - nur gesetzt, wenn matches=False
+    matched_keyword: str | None = None  # nur gesetzt, wenn reason == "keyword"
+
+
+def evaluate_attachment(
     *,
     attachment_filename: str,
     email_subject: str | None,
     allowed_extensions: set[str],
     keywords: list[str],
-) -> bool:
+) -> AttachmentEvaluation:
     """Ein Anhang wird heruntergeladen, wenn seine Endung erlaubt ist UND KEIN Ausschluss-Keyword
     im Betreff oder im Anhang-Dateinamen vorkommt (case-insensitive).
 
@@ -68,8 +80,30 @@ def attachment_matches(
     wird ausgeschlossen, es zählt nur der Endungsfilter.
     """
     if not extension_matches(attachment_filename, allowed_extensions):
-        return False
-    if not keywords:
-        return True
-    excluded = keyword_matches(email_subject, keywords) or keyword_matches(attachment_filename, keywords)
-    return not excluded
+        return AttachmentEvaluation(matches=False, reason="extension")
+
+    for kw in keywords:
+        if not kw:
+            continue
+        haystack = f"{email_subject or ''} {attachment_filename}".lower()
+        if kw.lower() in haystack:
+            return AttachmentEvaluation(matches=False, reason="keyword", matched_keyword=kw)
+
+    return AttachmentEvaluation(matches=True)
+
+
+def attachment_matches(
+    *,
+    attachment_filename: str,
+    email_subject: str | None,
+    allowed_extensions: set[str],
+    keywords: list[str],
+) -> bool:
+    """Abwärtskompatibler Wrapper um `evaluate_attachment()` für Aufrufer, die nur das
+    ja/nein-Ergebnis brauchen (z.B. die Unit-Tests)."""
+    return evaluate_attachment(
+        attachment_filename=attachment_filename,
+        email_subject=email_subject,
+        allowed_extensions=allowed_extensions,
+        keywords=keywords,
+    ).matches

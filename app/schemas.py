@@ -6,9 +6,14 @@ nur die Parsing-Logik, die von mehreren Routern gebraucht wird.
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from app.workers.filters import normalize_extension
+
+# Trennzeichen für Keyword-Listen: Komma ODER Zeilenumbruch (die Textarea erlaubt beides -
+# Nutzer können frei zwischen "eins pro Zeile" und kommagetrennt wählen oder mischen).
+_KEYWORD_SPLIT_RE = re.compile(r"[,\n\r]+")
 
 
 def parse_date_de(raw: str) -> date | None:
@@ -35,12 +40,17 @@ def parse_extensions(raw: str) -> list[str]:
 
 
 def parse_keywords(raw: str) -> list[tuple[str, str]]:
-    """'Avis, Zahlungserinnerung' -> [("avis", "Avis"), ("zahlungserinnerung", "Zahlungserinnerung")].
+    """'Avis, Zahlungserinnerung\\nMahnung' -> [("avis", "Avis"), ("zahlungserinnerung", "Zahlungserinnerung"),
+    ("mahnung", "Mahnung")].
 
-    Gibt (normalisiert, Original-Anzeige) zurück; Duplikate (case-insensitive) werden entfernt,
-    wobei die erste Schreibweise erhalten bleibt.
+    Trennt sowohl auf Komma als auch auf Zeilenumbruch (die Textarea erlaubt beides). Führende/
+    nachgestellte Leerzeichen um jeden Eintrag werden entfernt, mehrfache Leerzeichen INNERHALB
+    eines Eintrags (z.B. "Zahlungs  erinnerung") auf ein einzelnes reduziert. Gibt
+    (normalisiert, Original-Anzeige) zurück; Duplikate (case-insensitive) werden entfernt, wobei
+    die erste Schreibweise erhalten bleibt.
     """
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    parts = [re.sub(r"\s+", " ", p).strip() for p in _KEYWORD_SPLIT_RE.split(raw)]
+    parts = [p for p in parts if p]
     seen: dict[str, str] = {}
     for part in parts:
         key = part.lower()

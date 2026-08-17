@@ -28,7 +28,7 @@
     <thead><tr><th>E-Mail</th><th>Tenant</th><th>Sync-Status</th><th></th></tr></thead>
     <tbody>
       {% for row in mailboxes %}
-      {% set state = sync_by_mailbox.get(row.mailbox.id) %}
+      {% set summary = folder_summary.get(row.mailbox.id) %}
       {% set mailbox_id = row.mailbox.id %}
       {% set synced_count = synced_counts.get(row.mailbox.id, 0) %}
       {% set downloaded_count = downloaded_counts.get(row.mailbox.id, 0) %}

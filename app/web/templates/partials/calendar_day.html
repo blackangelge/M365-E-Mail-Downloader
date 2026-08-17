@@ -2,19 +2,19 @@
 <p class="hint" style="margin-top:-8px;">E-Mail-Empfangsdatum dieses Tages · sortiert nach Empfangszeit</p>
 {% if entries %}
 <table>
-  <thead><tr><th>Empfangen</th><th>Status</th><th>Heruntergeladen</th><th>Postfach</th><th>Betreff</th><th>Dateiname</th></tr></thead>
+  <thead><tr><th>Empfangen</th><th>Status</th><th>Postfach</th><th>Betreff</th><th>Dateiname</th></tr></thead>
   <tbody>
     {% for e in entries %}
     <tr>
-      <td>{{ e.email.received_at | datetime_de("%H:%M") }}</td>
+      <td>{{ e.received_at | datetime_de("%H:%M") }}</td>
       <td>
-        {% if e.sighting.is_new_download %}<span class="badge ok">heruntergeladen</span>
-        {% else %}<span class="badge idle">Duplikat (bereits vorhanden)</span>{% endif %}
+        {% if e.status == "new" %}<span class="badge ok">heruntergeladen</span>
+        {% elif e.status == "duplicate" %}<span class="badge idle">Duplikat (bereits vorhanden)</span>
+        {% else %}<span class="badge warn" title="{{ e.detail }}">Ausgeschlossen &middot; {{ e.detail }}</span>{% endif %}
       </td>
-      <td class="muted">{{ e.sighting.seen_at | datetime_de }}</td>
-      <td>{{ e.mailbox.email_address }}</td>
-      <td>{{ e.email.subject or "-" }}</td>
-      <td>{{ e.file.original_filename }}</td>
+      <td>{{ e.mailbox }}</td>
+      <td>{{ e.subject or "-" }}</td>
+      <td>{{ e.filename }}</td>
     </tr>
     {% endfor %}
   </tbody>

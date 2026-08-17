@@ -21,14 +21,15 @@
          value="{{ detail.extensions | map(attribute='extension') | join(', ') if detail else '.pdf' }}"
          placeholder=".pdf, .docx">
 
-  <label for="keywords">Ausschluss-Keywords (kommagetrennt, Groß-/Kleinschreibung egal, leer = keine Ausschlüsse)</label>
-  <input type="text" id="keywords" name="keywords"
-         value="{{ detail.keywords | map(attribute='keyword_display') | join(', ') if detail else '' }}"
-         placeholder="Avis, Zahlungserinnerung">
+  <label for="keywords">Ausschluss-Keywords (kommagetrennt oder je eine Zeile, Groß-/Kleinschreibung egal, leer = keine Ausschlüsse)</label>
+  <textarea id="keywords" name="keywords" rows="10" style="width:100%;max-width:700px;font-family:inherit;"
+            placeholder="Avis, Zahlungserinnerung, ...">{{ detail.keywords | map(attribute='keyword_display') | join(', ') if detail else '' }}</textarea>
+  {% if detail %}<p class="hint">Aktuell gespeichert: {{ detail.keywords | length }} Keyword(s).</p>{% endif %}
   <p class="hint">
     Dies ist ein <strong>Ausschluss</strong>-Filter: Ein Anhang wird heruntergeladen, wenn seine Endung passt UND
     <strong>keines</strong> der Keywords im Betreff oder im Dateinamen vorkommt. Enthält der Betreff oder Dateiname
-    eines dieser Wörter, wird der Anhang übersprungen.
+    eines dieser Wörter, wird der Anhang übersprungen. Leerzeichen vor/nach Kommas bzw. Zeilenumbrüchen werden
+    beim Speichern automatisch entfernt.
   </p>
 
   <div style="margin-top:20px;">

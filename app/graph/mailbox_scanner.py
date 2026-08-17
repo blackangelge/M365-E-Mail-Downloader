@@ -1,14 +1,16 @@
-"""Delta-Sync von Nachrichten eines Postfachs über die Microsoft Graph API.
+"""Delta-Sync von Nachrichten EINES Ordners eines Postfachs über die Microsoft Graph API.
 
-Nutzt den Message-Delta-Endpoint (`/users/{id}/mailFolders/inbox/messages/delta`), damit nach
-dem ersten vollen Durchlauf nur noch neue/geänderte Nachrichten abgefragt werden - nicht die
-gesamte Postfach-Historie bei jedem Poll. `$filter`/`$select` dürfen laut Graph-Doku nur beim
-allerersten Request (ohne `$deltatoken`) gesetzt werden; Folge-Requests verwenden ausschließlich
-den zurückgegebenen `@odata.nextLink`/`@odata.deltaLink`.
+Nutzt den Message-Delta-Endpoint (`/users/{id}/mailFolders/{folderId}/messages/delta`), damit
+nach dem ersten vollen Durchlauf nur noch neue/geänderte Nachrichten abgefragt werden - nicht die
+gesamte Ordner-Historie bei jedem Poll. `mail_folder` kann sowohl der Alias "inbox" als auch eine
+echte Graph-Ordner-ID sein (siehe app/graph/folders.py für die Ermittlung aller Unterordner).
+`$filter`/`$select` dürfen laut Graph-Doku nur beim allerersten Request (ohne `$deltatoken`)
+gesetzt werden; Folge-Requests verwenden ausschließlich den zurückgegebenen
+`@odata.nextLink`/`@odata.deltaLink`.
 
 Jede Ergebnisseite wird sofort an den Aufrufer übergeben, damit `delta_link` erst NACH dem
 durably committeten Upsert der Seite in `processed_emails` aktualisiert wird (siehe
-app/workers/tasks.py::sync_mailbox_delta) - so wird bei einem Absturz mitten im Sync ab der
+app/workers/tasks.py::_sync_single_folder) - so wird bei einem Absturz mitten im Sync ab der
 letzten committeten Seite fortgesetzt statt neu gescannt.
 """
 from __future__ import annotations

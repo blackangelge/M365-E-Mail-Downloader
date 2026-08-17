@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import get_settings
@@ -22,8 +22,10 @@ from app.events import log_event
 from app.graph.attachments import download_single_attachment, list_and_download_attachments
 from app.graph.client_factory import get_graph_client
 from app.graph.errors import PermanentGraphError
+from app.graph.folders import list_inbox_and_subfolders
 from app.graph.mailbox_scanner import scan_mailbox_delta
 from app.models import (
+    AttachmentSkip,
     EventCategory,
     EventLevel,
     FilterSet,
@@ -33,13 +35,14 @@ from app.models import (
     JobMailbox,
     JobMessageEvaluation,
     Mailbox,
-    MailboxSyncState,
+    MailboxFolder,
     ProcessedEmail,
+    SkipReason,
     SyncStatus,
     Tenant,
 )
 from app.workers.dedup import check_and_record, compute_sha256, record_sighting
-from app.workers.filters import attachment_matches, date_in_range
+from app.workers.filters import date_in_range, evaluate_attachment
 from app.workers.procrastinate_app import app, graph_retry_strategy
 from app.workers.storage import build_target_path, write_once
 
@@ -96,12 +99,18 @@ async def run_job(job_id: str) -> None:
 
 @app.task(queue="jobs", retry=graph_retry_strategy)
 async def sync_then_match(job_id: str, mailbox_id: str) -> None:
-    """Synchronisiert ein Postfach per Graph-Delta-Query und deferred anschließend die
-    Auswertung neuer Nachrichten für den auslösenden Job.
+    """Synchronisiert ALLE Ordner eines Postfachs (Posteingang + alle Unterordner, beliebig
+    verschachtelt, rekursiv per Graph ermittelt - siehe app/graph/folders.py) per Delta-Query und
+    deferred anschließend die Auswertung neuer Nachrichten für den auslösenden Job.
 
-    Der Delta-Sync selbst ist postfachbezogen (nicht jobbezogen) - beobachten mehrere Jobs
-    dasselbe Postfach, läuft der Sync entsprechend mehrfach, liefert aber ab dem zweiten Mal
-    dank des bereits fortgeschrittenen `delta_link` nur noch eine leere Seite.
+    Ein Fehler in einem einzelnen Ordner (z.B. während der Zugriff darauf zwischenzeitlich
+    verweigert wird) blockiert NICHT die übrigen Ordner - jeder Ordner wird einzeln versucht,
+    Fehler werden pro Ordner in MailboxFolder.status/last_error festgehalten. Bereits committeter
+    Fortschritt einzelner Ordner bleibt in jedem Fall erhalten.
+
+    Der Sync selbst ist postfachbezogen (nicht jobbezogen) - beobachten mehrere Jobs dasselbe
+    Postfach, läuft der Sync entsprechend mehrfach, liefert aber ab dem zweiten Mal dank der
+    bereits fortgeschrittenen `delta_link`s nur noch leere Seiten.
     """
     mailbox_uuid = uuid.UUID(mailbox_id)
 
@@ -113,24 +122,94 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
         if tenant is None or not tenant.is_active:
             return
 
-        sync_state = await session.get(MailboxSyncState, mailbox_uuid)
-        # Vorheriger Status wird festgehalten, um unten zu erkennen, ob sich gerade etwas
-        # AENDERT (Fehler behoben / erster Verbindungsversuch) - nur solche Übergänge werden als
-        # "graph_connection"-Ereignis protokolliert, nicht jeder einzelne erfolgreiche Sync-Lauf,
-        # damit die Ereignisliste bei kurzen Poll-Intervallen nicht zuflutet.
-        previous_status = sync_state.status if sync_state else None
-        if sync_state is None:
-            sync_state = MailboxSyncState(mailbox_id=mailbox_uuid, status=SyncStatus.IDLE)
-            session.add(sync_state)
-            await session.flush()
+    try:
+        client = await get_graph_client(tenant)
+        discovered = await list_inbox_and_subfolders(client, mailbox.email_address)
+    except PermanentGraphError as exc:
+        async with async_session_factory() as session:
+            await log_event(
+                session,
+                category=EventCategory.GRAPH_CONNECTION,
+                level=EventLevel.ERROR,
+                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                tenant_id=tenant.id,
+                mailbox_id=mailbox_uuid,
+            )
+        return  # kein Retry, kein Weiterlaufen zur Auswertung
+    except Exception as exc:
+        async with async_session_factory() as session:
+            await log_event(
+                session,
+                category=EventCategory.GRAPH_CONNECTION,
+                level=EventLevel.ERROR,
+                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
+                tenant_id=tenant.id,
+                mailbox_id=mailbox_uuid,
+            )
+        raise  # transient - Procrastinate versucht es per graph_retry_strategy erneut
 
-        delta_link = sync_state.delta_link
-        sync_state.status = SyncStatus.RUNNING
+    # Ordnerliste aktuell halten: neue Ordner anlegen, bestehende (samt ihrem delta_link!)
+    # unangetastet lassen. Verschwundene/umbenannte Ordner werden bewusst nicht entfernt -
+    # verwaiste Zeilen sind harmlos und der nächste Sync-Versuch für sie schlägt einfach fehl.
+    async with async_session_factory() as session:
+        existing_result = await session.execute(select(MailboxFolder).where(MailboxFolder.mailbox_id == mailbox_uuid))
+        existing_by_graph_id = {f.graph_folder_id: f for f in existing_result.scalars().all()}
+
+        folder_ids: list[uuid.UUID] = []
+        for info in discovered:
+            existing = existing_by_graph_id.get(info.graph_folder_id)
+            if existing is not None:
+                if existing.display_path != info.display_path:
+                    existing.display_path = info.display_path  # z.B. umbenannt/verschoben
+                folder_ids.append(existing.id)
+            else:
+                new_folder = MailboxFolder(
+                    mailbox_id=mailbox_uuid,
+                    graph_folder_id=info.graph_folder_id,
+                    display_path=info.display_path,
+                    status=SyncStatus.IDLE,
+                )
+                session.add(new_folder)
+                await session.flush()
+                folder_ids.append(new_folder.id)
+
+        await session.commit()
+
+    any_success = False
+    for folder_id in folder_ids:
+        try:
+            await _sync_single_folder(client, mailbox_uuid, mailbox.email_address, folder_id)
+            any_success = True
+        except Exception:  # noqa: BLE001 - ein fehlerhafter Ordner darf die anderen nicht blockieren
+            continue
+
+    if any_success:
+        async with async_session_factory() as session:
+            await log_event(
+                session,
+                category=EventCategory.GRAPH_CONNECTION,
+                level=EventLevel.INFO,
+                message=f"Verbindung zu M365 erfolgreich (Postfach {mailbox.email_address}, {len(folder_ids)} Ordner).",
+                tenant_id=tenant.id,
+                mailbox_id=mailbox_uuid,
+            )
+
+    await match_job_against_mailbox(job_id=job_id, mailbox_id=mailbox_id)
+
+
+async def _sync_single_folder(client, mailbox_uuid: uuid.UUID, mailbox_address: str, folder_id: uuid.UUID) -> None:
+    """Delta-Sync für genau EINEN Ordner (siehe `sync_then_match` für die Ordner-Schleife).
+    Wirft bei einem Fehler weiter, damit der Aufrufer weiß, dass dieser Ordner nicht erfolgreich
+    war - der Fehler selbst ist zu diesem Zeitpunkt bereits in MailboxFolder persistiert."""
+    async with async_session_factory() as session:
+        folder = await session.get(MailboxFolder, folder_id)
+        delta_link = folder.delta_link
+        graph_folder_id = folder.graph_folder_id
+        folder.status = SyncStatus.RUNNING
         await session.commit()
 
     try:
-        client = await get_graph_client(tenant)
-        async for page in scan_mailbox_delta(client, mailbox.email_address, delta_link):
+        async for page in scan_mailbox_delta(client, mailbox_address, delta_link, mail_folder=graph_folder_id):
             async with async_session_factory() as session:
                 for msg in page.messages:
                     stmt = (
@@ -155,66 +234,29 @@ async def sync_then_match(job_id: str, mailbox_id: str) -> None:
                     await session.execute(stmt)
 
                 if page.next_delta_link:
-                    sync_state = await session.get(MailboxSyncState, mailbox_uuid)
-                    sync_state.delta_link = page.next_delta_link
-                    sync_state.last_delta_run_at = datetime.now(timezone.utc)
-                    sync_state.status = SyncStatus.IDLE
-                    sync_state.last_error = None
+                    folder = await session.get(MailboxFolder, folder_id)
+                    folder.delta_link = page.next_delta_link
+                    folder.last_delta_run_at = datetime.now(timezone.utc)
+                    folder.status = SyncStatus.IDLE
+                    folder.last_error = None
 
                 await session.commit()
 
-        if previous_status != SyncStatus.IDLE:
-            # Erster erfolgreicher Verbindungsversuch oder Erholung nach einem Fehler.
-            async with async_session_factory() as session:
-                await log_event(
-                    session,
-                    category=EventCategory.GRAPH_CONNECTION,
-                    level=EventLevel.INFO,
-                    message=f"Verbindung zu M365 erfolgreich (Postfach {mailbox.email_address}).",
-                    tenant_id=tenant.id,
-                    mailbox_id=mailbox_uuid,
-                )
-
     except PermanentGraphError as exc:
         async with async_session_factory() as session:
-            sync_state = await session.get(MailboxSyncState, mailbox_uuid)
-            sync_state.status = SyncStatus.ERROR
-            sync_state.last_error = str(exc)
-            await log_event(
-                session,
-                category=EventCategory.GRAPH_CONNECTION,
-                level=EventLevel.ERROR,
-                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
-                tenant_id=tenant.id,
-                mailbox_id=mailbox_uuid,
-                commit=False,
-            )
-            await session.commit()
-        return  # kein Retry, kein Weiterlaufen zur Auswertung
-
-    except Exception as exc:
-        # Transiente Fehler (Netzwerk, 5xx, Throttling, ...) sollen weiterhin von Procrastinate
-        # per graph_retry_strategy wiederholt werden (daher hier "raise" statt "return") - aber
-        # der Status wird trotzdem sichtbar auf "Fehler" gesetzt, statt scheinbar endlos bei
-        # "läuft" hängen zu bleiben, während im Hintergrund wiederholt fehlgeschlagen wird. Sobald
-        # ein Versuch erfolgreich ist, wird der Status oben wieder auf IDLE zurückgesetzt.
-        async with async_session_factory() as session:
-            sync_state = await session.get(MailboxSyncState, mailbox_uuid)
-            sync_state.status = SyncStatus.ERROR
-            sync_state.last_error = str(exc)
-            await log_event(
-                session,
-                category=EventCategory.GRAPH_CONNECTION,
-                level=EventLevel.ERROR,
-                message=f"Verbindung zu M365 fehlgeschlagen (Postfach {mailbox.email_address}): {exc}",
-                tenant_id=tenant.id,
-                mailbox_id=mailbox_uuid,
-                commit=False,
-            )
+            folder = await session.get(MailboxFolder, folder_id)
+            folder.status = SyncStatus.ERROR
+            folder.last_error = str(exc)
             await session.commit()
         raise
 
-    await match_job_against_mailbox(job_id=job_id, mailbox_id=mailbox_id)
+    except Exception as exc:
+        async with async_session_factory() as session:
+            folder = await session.get(MailboxFolder, folder_id)
+            folder.status = SyncStatus.ERROR
+            folder.last_error = str(exc)
+            await session.commit()
+        raise
 
 
 async def match_job_against_mailbox(job_id: str, mailbox_id: str) -> None:
@@ -262,8 +304,11 @@ async def evaluate_job_for_message(job_id: str, processed_email_id: str) -> None
         )
         allowed_extensions = {row[0] for row in ext_result.all()}
 
+        # keyword_display (nicht keyword_normalized) verwenden, damit ein aufgezeichneter
+        # Ausschluss (AttachmentSkip.matched_keyword) in der Original-Schreibweise angezeigt
+        # werden kann - der Abgleich selbst ist ohnehin case-insensitive.
         kw_result = await session.execute(
-            select(FilterSetKeyword.keyword_normalized).where(FilterSetKeyword.filter_set_id == job.filter_set_id)
+            select(FilterSetKeyword.keyword_display).where(FilterSetKeyword.filter_set_id == job.filter_set_id)
         )
         keywords = [row[0] for row in kw_result.all()]
 
@@ -271,16 +316,18 @@ async def evaluate_job_for_message(job_id: str, processed_email_id: str) -> None
         tenant = await session.get(Tenant, mailbox.tenant_id)
 
     matched_count = 0
+    skips: list[tuple[str, SkipReason, str | None]] = []
     try:
         client = await get_graph_client(tenant)
         attachments = await list_and_download_attachments(client, mailbox.email_address, email.message_id)
         for attachment in attachments:
-            if attachment_matches(
+            evaluation = evaluate_attachment(
                 attachment_filename=attachment.name,
                 email_subject=email.subject,
                 allowed_extensions=allowed_extensions,
                 keywords=keywords,
-            ):
+            )
+            if evaluation.matches:
                 matched_count += 1
                 await download_attachment.defer_async(
                     job_id=job_id,
@@ -290,6 +337,8 @@ async def evaluate_job_for_message(job_id: str, processed_email_id: str) -> None
                     graph_attachment_id=attachment.attachment_id,
                     attachment_name=attachment.name,
                 )
+            else:
+                skips.append((attachment.name, SkipReason(evaluation.reason), evaluation.matched_keyword))
     except PermanentGraphError:
         # Zugangsdaten wurden zwischenzeitlich ungültig - Auswertung nicht als erledigt markieren,
         # damit sie bei einem erneuten Job-Lauf mit gültigen Credentials nachgeholt wird.
@@ -307,6 +356,28 @@ async def evaluate_job_for_message(job_id: str, processed_email_id: str) -> None
             .on_conflict_do_nothing(constraint="uq_job_message_eval")
         )
         await session.execute(stmt)
+
+        # Ausschlüsse aufzeichnen, damit sie im Kalender sichtbar sind (siehe
+        # app/web/routers/calendar.py) statt spurlos zu verschwinden. ON CONFLICT DO UPDATE (statt
+        # DO NOTHING): nach einer Filter-Änderung kann sich der Ausschlussgrund für dieselbe
+        # Nachricht ändern (z.B. anderes Keyword) - der Eintrag soll dann aktuell bleiben.
+        for filename, reason, matched_keyword in skips:
+            skip_stmt = (
+                pg_insert(AttachmentSkip)
+                .values(
+                    processed_email_id=email_uuid,
+                    job_id=job_uuid,
+                    filename_on_email=filename,
+                    reason=reason,
+                    matched_keyword=matched_keyword,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_attachment_skip",
+                    set_={"reason": reason, "matched_keyword": matched_keyword, "skipped_at": func.now()},
+                )
+            )
+            await session.execute(skip_stmt)
+
         await session.commit()
 
 
